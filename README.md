@@ -14,5 +14,8 @@ uv run pytest
 doğrulaması, entity resolution, RRF, LM Studio HTTP adaptörü (mock transport ile), bellek içi
 referans depo (idempotency, lease fencing, atomik yayın, silme), worker.
 
+Faz 5–6 (bellek içi kaynak + betikli sahte yanıt modeli ile test edildi): varlık bağlama, sınırlı graf
+genişletme, kanıt birleştirme/bütçe, yapılandırılmış yanıt, atıf doğrulama, abstention, graph_version kontrolü.
+
 Henüz çalıştırılmayan/yazılmayan: Neo4j repository (migrasyon dosyası yazıldı, uygulanmadı),
 FastAPI, Streamlit, graf genişletme, yanıt üretimi, InferenceGate, canlı LM Studio testleri.

@@ -21,8 +21,8 @@ Her faz bir **çıkış kapısı** ile biter; kapı geçmeden sonraki faza geçi
 | 2 | Deterministik chunker (tam dilim, kod noktası ofsetleri), sahte extraction/embedding, worker iş döngüsü, lease fencing, atomik yayın | Worker yalnızca tam revizyonu yayınlar | Bu turda (bellek içi) |
 | 3 | LM Studio HTTPX adaptörü, capability probe'ları, extraction şeması + doğrulama sırası, entity resolution | Doğrulama/ontoloji birim testleri; canlı test sonra | Bu turda (adaptör + doğrulama) |
 | 4 | Arama: RRF, lexical/vector aday birleştirme, aktif revizyon filtresi | Eski/silinmiş kanıt asla dönmez | Bu turda (RRF + filtre mantığı) |
-| 5 | Graf genişletme (2 semantik sıçrama, limitler), kanıt paketleme, token bütçesi | Çok-notlu 2-hop fikstürü | Sonraki tur |
-| 6 | Yanıt üretimi, atıf doğrulama, abstention, graph_version kontrolü | Çalışan örnek soru-cevap | Sonraki tur |
+| 5 | Graf genişletme (2 semantik sıçrama, limitler), kanıt paketleme, token bütçesi | Çok-notlu 2-hop fikstürü | Tamamlandı (bellek içi kaynak) |
+| 6 | Yanıt üretimi, atıf doğrulama, abstention, graph_version kontrolü | Çalışan örnek soru-cevap | Tamamlandı (sahte model ile) |
 | 7 | FastAPI uçları + Streamlit arayüzü (Notes/Ask/Graph/System) | Uçtan uca kullanıcı akışı | Sonraki tur |
 | 8 | Güvenilirlik: InferenceGate, yeniden deneme bütçeleri, restart kurtarma, yedekleme | Hata enjeksiyon testleri | Sonraki tur |
 | 9 | Değerlendirme seti, baseline'lar, canlı smoke, operasyon rehberi | Raporlanmış sonuçlar | Sonraki tur |

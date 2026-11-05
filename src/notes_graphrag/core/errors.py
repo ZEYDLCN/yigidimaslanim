@@ -57,3 +57,19 @@ class ProviderBadResponse(AppError):
 class StaleLease(AppError):
     code = "STALE_LEASE"
     http_status = 409
+
+
+class KnowledgeBaseChanged(Conflict):
+    code = "KNOWLEDGE_BASE_CHANGED"
+    retryable = True
+
+
+class QuestionTimeout(AppError):
+    code = "QUESTION_TIMEOUT"
+    http_status = 503
+    retryable = True
+
+
+class GenerationInvalid(AppError):
+    code = "GENERATION_INVALID"
+    http_status = 502
