@@ -34,6 +34,7 @@ select = ["E", "F", "I", "UP", "B"]
 [tool.mypy]
 strict = true
 files = ["src"]
+exclude = ["ui"]
 plugins = ["pydantic.mypy"]
 
 [tool.pytest.ini_options]

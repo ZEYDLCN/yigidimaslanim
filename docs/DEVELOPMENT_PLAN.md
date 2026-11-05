@@ -23,7 +23,7 @@ Her faz bir **çıkış kapısı** ile biter; kapı geçmeden sonraki faza geçi
 | 4 | Arama: RRF, lexical/vector aday birleştirme, aktif revizyon filtresi | Eski/silinmiş kanıt asla dönmez | Bu turda (RRF + filtre mantığı) |
 | 5 | Graf genişletme (2 semantik sıçrama, limitler), kanıt paketleme, token bütçesi | Çok-notlu 2-hop fikstürü | Tamamlandı (bellek içi kaynak) |
 | 6 | Yanıt üretimi, atıf doğrulama, abstention, graph_version kontrolü | Çalışan örnek soru-cevap | Tamamlandı (sahte model ile) |
-| 7 | FastAPI uçları + Streamlit arayüzü (Notes/Ask/Graph/System) | Uçtan uca kullanıcı akışı | Sonraki tur |
+| 7 | FastAPI uçları + Streamlit arayüzü (Notes/Ask/Graph/System) | Uçtan uca kullanıcı akışı | Tamamlandı (bellek içi depo + demo sağlayıcılarla; Neo4j yok) |
 | 8 | Güvenilirlik: InferenceGate, yeniden deneme bütçeleri, restart kurtarma, yedekleme | Hata enjeksiyon testleri | Sonraki tur |
 | 9 | Değerlendirme seti, baseline'lar, canlı smoke, operasyon rehberi | Raporlanmış sonuçlar | Sonraki tur |
 
