@@ -20,15 +20,9 @@ from notes_graphrag.core.errors import AppError
 log = logging.getLogger("notes_graphrag")
 
 
-def worker_loop(ctx: AppContext) -> None:
-    while not ctx.stop.is_set():
-        try:
-            job = ctx.worker.run_once()
-        except Exception:  # noqa: BLE001
-            log.exception("worker iteration failed")
-            job = None
-        if job is None:
-            ctx.stop.wait(0.2)
+from neo4j.exceptions import Neo4jError, ServiceUnavailable, SessionExpired  # noqa: E402
+
+from notes_graphrag.ingestion.worker import run_forever  # noqa: E402
 
 
 def _envelope(
@@ -45,9 +39,13 @@ def create_app(ctx: AppContext) -> FastAPI:
     @asynccontextmanager
     async def lifespan(_: FastAPI) -> AsyncIterator[None]:
         thread = None
-        if ctx.run_worker:
+        if ctx.embedded_worker:
             ctx.stop.clear()
-            thread = threading.Thread(target=worker_loop, args=(ctx,), daemon=True)
+            thread = threading.Thread(
+                target=run_forever,
+                args=(ctx.worker, ctx.store, ctx.stop, ctx.settings.worker_poll_seconds),
+                daemon=True,
+            )
             thread.start()
         yield
         ctx.stop.set()
@@ -84,6 +82,17 @@ def create_app(ctx: AppContext) -> FastAPI:
     async def invalid(request: Request, exc: RequestValidationError) -> JSONResponse:
         fields = ", ".join(".".join(str(p) for p in e["loc"]) for e in exc.errors())
         return _envelope(request, "VALIDATION_FAILED", f"invalid request fields: {fields}", 422)
+
+    @app.exception_handler(ServiceUnavailable)
+    @app.exception_handler(SessionExpired)
+    async def database_down(request: Request, exc: Exception) -> JSONResponse:
+        log.warning("database unavailable")
+        return _envelope(request, "DEPENDENCY_UNAVAILABLE", "database is unavailable", 503, True)
+
+    @app.exception_handler(Neo4jError)
+    async def database_error(request: Request, exc: Exception) -> JSONResponse:
+        log.error("database error: %s", type(exc).__name__)
+        return _envelope(request, "DATABASE_ERROR", "database request failed", 503, True)
 
     @app.exception_handler(Exception)
     async def unexpected(request: Request, exc: Exception) -> JSONResponse:

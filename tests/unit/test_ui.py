@@ -21,7 +21,7 @@ NOTE = "Ada works on Project Atlas. Project Atlas uses Neo4j."
 def env(monkeypatch):
     import api_client
 
-    ctx = build_context(Settings(_env_file=None), demo=True, run_worker=False)
+    ctx = build_context(Settings(_env_file=None), demo=True, backend="memory")
     client = TestClient(create_app(ctx))
     monkeypatch.setattr(api_client, "CLIENT_FACTORY", lambda: client)
     return ctx

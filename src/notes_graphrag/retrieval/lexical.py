@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import re
+import unicodedata
 
 _SPECIAL = re.compile(r'([+\-&|!(){}\[\]^"~*?:\\/])')
 
@@ -21,10 +22,18 @@ STOPWORDS = frozenset(
 )
 
 
-def tokens(text: str) -> list[str]:
-    from notes_graphrag.ingestion.entity_resolution import normalize_name
+def fold_for_search(text: str) -> str:
+    """Search-only folding. Turkish capital dotted I maps to i (not to i + combining dot).
 
-    return re.findall(r"\w+", normalize_name(text))
+    This is deliberately NOT used for entity identity: identity keeps I, İ, ı and i distinct
+    (architecture 6.4). Dotless ı stays distinct here as well.
+    """
+    s = unicodedata.normalize("NFC", text.replace("İ", "i")).lower()
+    return s.replace("\u0307", "")
+
+
+def tokens(text: str) -> list[str]:
+    return re.findall(r"\w+", fold_for_search(text))
 
 
 def query_terms(question: str) -> list[str]:

@@ -100,6 +100,10 @@ class DemoChat:
 
     def __init__(self) -> None:
         self._extract = FakeChat()
+        self.calls = 0
+
+    def chat_text(self, *, model: str, system: str, user: str, max_tokens: int) -> str:
+        return "ok"
 
     def chat_json(
         self,
@@ -111,6 +115,7 @@ class DemoChat:
         schema: dict[str, Any],
         max_tokens: int,
     ) -> str:
+        self.calls += 1
         if schema_name != "answer":
             return self._extract.chat_json(
                 model=model,

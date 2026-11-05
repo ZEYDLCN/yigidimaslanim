@@ -13,6 +13,9 @@ dependencies = [
   "python-multipart>=0.0.9",
 ]
 
+[project.scripts]
+notes-graphrag = "notes_graphrag.cli:main"
+
 [dependency-groups]
 ui = ["streamlit>=1.36"]
 dev = ["pytest>=8", "pytest-asyncio>=0.23", "ruff>=0.5", "mypy>=1.10"]
@@ -39,5 +42,6 @@ plugins = ["pydantic.mypy"]
 
 [tool.pytest.ini_options]
 testpaths = ["tests"]
+pythonpath = ["."]
 asyncio_default_fixture_loop_scope = "function"
 markers = ["live_lmstudio: needs a running LM Studio", "neo4j: needs a Neo4j instance"]

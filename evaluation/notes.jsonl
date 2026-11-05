@@ -1,0 +1,9 @@
+{"id":"n01","lang":"en","title":"Atlas planning","text":"Ada works on Project Atlas. Project Atlas uses Neo4j."}
+{"id":"n02","lang":"en","title":"Borealis","text":"Grace works on Project Borealis. Project Borealis uses PostgreSQL."}
+{"id":"n03","lang":"tr","title":"Atlas ekibi","text":"Mert, Project Atlas üzerinde çalışıyor. Ekip veritabanı olarak Neo4j kullanıyor."}
+{"id":"n04","lang":"en","title":"Rituals","text":"The team meets every Tuesday at 10:00 to review the sprint."}
+{"id":"n05","lang":"tr","title":"Ofis toplantısı","text":"İstanbul ofisinde toplantı yapıldı. Bütçe onaylandı."}
+{"id":"n06","lang":"en","title":"Preferences","text":"Ada prefers tea over coffee in the mornings."}
+{"id":"n07","lang":"en","title":"Zeta plan","text":"Project Zeta is planned for next year and may use MongoDB."}
+{"id":"n08","lang":"tr","title":"Borealis ekibi","text":"Deniz Project Borealis'te çalışıyor."}
+{"id":"n09","lang":"en","title":"Backups","text":"Backups run nightly at 02:00 and are stored for thirty days."}

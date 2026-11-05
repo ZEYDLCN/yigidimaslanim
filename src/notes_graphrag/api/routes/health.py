@@ -1,10 +1,11 @@
 from __future__ import annotations
 
+from datetime import UTC, datetime
+
 from fastapi import APIRouter, Request
 from fastapi.responses import JSONResponse
 
 from notes_graphrag.api.common import ctx_of, ok
-from notes_graphrag.ingestion.service import utcnow
 
 router = APIRouter()
 WORKER_FRESH_SECONDS = 30
@@ -18,27 +19,40 @@ def live() -> dict[str, str]:
 @router.get("/health/ready")
 def ready(request: Request) -> JSONResponse:
     ctx = ctx_of(request)
-    checks = {
-        "persistence": f"{ctx.mode} (in-memory, non-durable; Neo4j repository not implemented)",
-        "embedding_profile": ctx.settings.embedding_profile,
+    h = ctx.store.health()
+    schema_ok = h.get("schema_version") == h.get("expected_schema_version", h.get("schema_version"))
+    indexes_ok = h.get("indexes_online") is not False
+    is_ready = bool(h.get("reachable")) and schema_ok and indexes_ok
+    body = {
+        "status": "ready" if is_ready else "not_ready",
+        "checks": {
+            "persistence": h.get("persistence"),
+            "reachable": h.get("reachable"),
+            "schema_version": h.get("schema_version"),
+            "schema_ok": schema_ok,
+            "indexes_online": h.get("indexes_online"),
+            "embedding_profile": ctx.settings.embedding_profile,
+        },
     }
-    return JSONResponse({"status": "ready", "checks": checks})
+    return JSONResponse(body, status_code=200 if is_ready else 503)
 
 
 @router.get("/api/v1/system/status")
 def system_status(request: Request) -> JSONResponse:
     ctx = ctx_of(request)
-    hb = ctx.store.worker_heartbeat
-    age = (utcnow() - hb).total_seconds() if hb else None
+    hb = ctx.store.last_heartbeat()
+    age = (datetime.now(UTC) - hb).total_seconds() if hb else None
+    gate = ctx.store.gate_status(ctx.settings.lm_studio_instance_id)
     return ok(
         request,
         {
             "mode": ctx.mode,
-            "graph_version": ctx.store.graph_version,
+            "graph_version": ctx.store.graph_version(),
             "worker": {
                 "heartbeat_age_seconds": age,
                 "fresh": age is not None and age <= WORKER_FRESH_SECONDS,
             },
+            "inference_slot": {"state": gate.state, "lease_expires_at": gate.lease_expires_at},
             "lm_studio": ctx.lm_status(),
             "models": {
                 "extraction": ctx.settings.extraction_model,
@@ -47,6 +61,5 @@ def system_status(request: Request) -> JSONResponse:
                 "embedding_profile": ctx.settings.embedding_profile,
                 "embedding_dimensions": ctx.settings.embedding_dimensions,
             },
-            "inference_gate": "not implemented (planned for the reliability phase)",
         },
     )

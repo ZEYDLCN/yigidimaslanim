@@ -1,7 +1,7 @@
 """Read-side view of the active knowledge base.
 
-Every method returns only data reachable through a non-deleted note's READY active
-revision. Implementations (memory today, Neo4j later) must enforce that scoping.
+Every method returns only data reachable through a non-deleted note's READY active revision.
+Implementations (memory, Neo4j) must enforce that scoping inside the query itself.
 """
 
 from __future__ import annotations
@@ -19,7 +19,6 @@ class ChunkRecord:
     start_char: int
     end_char: int
     text: str
-    embedding: tuple[float, ...]
     revision_text: str
 
 
@@ -38,6 +37,9 @@ class ClaimRecord:
     evidence_start: int
     evidence_end: int
     temporal_text: str | None
+    note_id: str
+    revision_id: str
+    title: str
 
 
 @dataclass(frozen=True)
@@ -49,8 +51,12 @@ class EntityRecord:
 
 class KnowledgeSource(Protocol):
     def graph_version(self) -> int: ...
-    def chunks(self) -> list[ChunkRecord]: ...
+    def vector_candidates(self, vec: list[float], k: int) -> list[tuple[str, float]]: ...
+    def lexical_candidates(self, question: str, k: int) -> list[str]: ...
+    def chunks_by_ids(self, ids: list[str]) -> dict[str, ChunkRecord]: ...
     def chunk(self, chunk_id: str) -> ChunkRecord | None: ...
     def entities(self) -> list[EntityRecord]: ...
     def claims_for_entity(self, entity_id: str) -> list[ClaimRecord]: ...
     def claims_for_chunk(self, chunk_id: str) -> list[ClaimRecord]: ...
+    def claims_for_note(self, note_id: str) -> list[ClaimRecord]: ...
+    def note_active_chunks(self, note_id: str) -> int: ...

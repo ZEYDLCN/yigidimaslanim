@@ -1,0 +1,16 @@
+{"id":"q01","lang":"en","question":"Who works on Project Borealis?","answerable":true,"expected_notes":["n02","n08"],"hops":1}
+{"id":"q02","lang":"en","question":"What database does Project Borealis use?","answerable":true,"expected_notes":["n02"],"hops":1}
+{"id":"q03","lang":"en","question":"Which database does Ada's project use?","answerable":true,"expected_notes":["n01"],"hops":2}
+{"id":"q04","lang":"tr","question":"Atlas projesinde hangi veritabanı kullanılıyor?","answerable":true,"expected_notes":["n03"],"hops":1}
+{"id":"q05","lang":"tr","question":"Mert hangi projede çalışıyor?","answerable":true,"expected_notes":["n03"],"hops":1}
+{"id":"q06","lang":"en","question":"What time does the team meet?","answerable":true,"expected_notes":["n04"],"hops":1}
+{"id":"q07","lang":"en","question":"What is the backup schedule?","answerable":true,"expected_notes":["n09"],"hops":1}
+{"id":"q08","lang":"tr","question":"İstanbul ofisinde ne yapıldı?","answerable":true,"expected_notes":["n05"],"hops":1}
+{"id":"q09","lang":"en","question":"Does Ada prefer coffee or tea?","answerable":true,"expected_notes":["n06"],"hops":1}
+{"id":"q10","lang":"en","question":"Which database is planned for Project Zeta?","answerable":true,"expected_notes":["n07"],"hops":1}
+{"id":"q11","lang":"en","question":"Which database does the Atlas team use?","answerable":true,"expected_notes":["n01","n03"],"hops":2}
+{"id":"q12","lang":"en","question":"What is the capital of France?","answerable":false,"expected_notes":[],"hops":0}
+{"id":"q13","lang":"en","question":"Who is the CEO of Microsoft?","answerable":false,"expected_notes":[],"hops":0}
+{"id":"q14","lang":"tr","question":"Fransa'nın başkenti neresi?","answerable":false,"expected_notes":[],"hops":0}
+{"id":"q15","lang":"en","question":"What is the boiling point of water at sea level?","answerable":false,"expected_notes":[],"hops":0}
+{"id":"q16","lang":"en","question":"Which programming language does Grace's team prefer?","answerable":false,"expected_notes":[],"hops":0}

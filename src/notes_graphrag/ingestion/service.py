@@ -1,4 +1,4 @@
-"""Note service: idempotent create/replace/delete (architecture section 7)."""
+"""Note service: idempotent create, replace, reindex and delete (architecture section 7)."""
 
 from __future__ import annotations
 
@@ -12,7 +12,8 @@ from notes_graphrag.ingestion.chunking import CHUNKER_VERSION
 from notes_graphrag.ingestion.entity_resolution import NORMALIZATION_VERSION
 from notes_graphrag.ingestion.extraction import SCHEMA_VERSION
 from notes_graphrag.ingestion.validation import normalize_text, validate_title
-from notes_graphrag.persistence.memory import Job, MemoryStore, Note, Revision
+from notes_graphrag.persistence.base import Store
+from notes_graphrag.persistence.models import Submission
 
 PROMPT_VERSION = "extract_v1"
 
@@ -35,31 +36,26 @@ def utcnow() -> datetime:
 
 class NoteService:
     def __init__(
-        self, store: MemoryStore, settings: Settings, clock: Callable[[], datetime] = utcnow
+        self, store: Store, settings: Settings, clock: Callable[[], datetime] = utcnow
     ) -> None:
         self.store, self.settings, self.clock = store, settings, clock
 
-    def _payload_hash(self, title: str, text: str) -> str:
+    def _rkey(self, method: str, route: str, key: str) -> str:
+        return hashlib.sha256(
+            f"{self.store.workspace_id}|{method}|{route}|{key}".encode()
+        ).hexdigest()
+
+    @staticmethod
+    def _payload_hash(title: str, text: str) -> str:
         return hashlib.sha256(json.dumps([title, text], ensure_ascii=False).encode()).hexdigest()
-
-    def create(self, title: str, text: str, idempotency_key: str) -> tuple[Note, Revision, Job]:
-        return self._submit("POST", "/notes", None, title, text, idempotency_key)
-
-    def replace(
-        self, note_id: str, title: str, text: str, idempotency_key: str
-    ) -> tuple[Note, Revision, Job]:
-        return self._submit("PUT", f"/notes/{note_id}", note_id, title, text, idempotency_key)
-
-    def delete(self, note_id: str) -> None:
-        self.store.delete_note(note_id, self.clock())
 
     def _submit(
         self, method: str, route: str, note_id: str | None, title: str, text: str, key: str
-    ) -> tuple[Note, Revision, Job]:
+    ) -> Submission:
         title = validate_title(title, self.settings)
         text = normalize_text(text, self.settings)
-        note, rev, job, _ = self.store.submit(
-            rkey=self.store.request_key(method, route, key),
+        return self.store.submit(
+            rkey=self._rkey(method, route, key),
             payload_hash=self._payload_hash(title, text),
             note_id=note_id,
             title=title,
@@ -67,4 +63,27 @@ class NoteService:
             fingerprint=pipeline_fingerprint(self.settings),
             now=self.clock(),
         )
-        return note, rev, job
+
+    def create(self, title: str, text: str, idempotency_key: str) -> Submission:
+        return self._submit("POST", "/notes", None, title, text, idempotency_key)
+
+    def replace(self, note_id: str, title: str, text: str, idempotency_key: str) -> Submission:
+        return self._submit("PUT", f"/notes/{note_id}", note_id, title, text, idempotency_key)
+
+    def reindex(self, note_id: str, idempotency_key: str) -> Submission:
+        from notes_graphrag.core.errors import NotFound
+
+        note = self.store.get_note(note_id)
+        if note is None or note.deleted_at is not None:
+            raise NotFound("note not found")
+        cur = self.store.get_revision(note.desired_revision_id)
+        assert cur is not None
+        return self._submit(
+            "POST", f"/notes/{note_id}/reindex", note_id, cur.title, cur.text, idempotency_key
+        )
+
+    def retry(self, job_id: str) -> None:
+        self.store.retry_job(job_id, self.clock())
+
+    def delete(self, note_id: str) -> None:
+        self.store.delete_note(note_id, self.clock())

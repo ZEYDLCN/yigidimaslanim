@@ -6,3 +6,5 @@ __pycache__/
 .ruff_cache/
 *.egg-info/
 reports/
+wheelhouse/
+requirements.lock.txt

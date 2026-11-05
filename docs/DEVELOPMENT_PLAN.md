@@ -1,33 +1,44 @@
-# Geliştirme Planı (Fazlar)
+# Development plan and status
 
-Kaynak: mimari belge (Notes → Knowledge Graph: GraphRAG + Neo4j + LM Studio).
-Bu plan, mimarideki Bölüm 17 yol haritasını uygulanabilir iş paketlerine böler.
-Her faz bir **çıkış kapısı** ile biter; kapı geçmeden sonraki faza geçilmez.
+Source: the architecture document (Notes → Knowledge Graph). Phases follow its section 17.
 
-## Ortam kısıtları (bu bulut oturumu)
+## Status
 
-- LM Studio bu makinede yok. Canlı model testleri (`live_lmstudio`) çalıştırılamaz;
-  bunun yerine **deterministik sahte sağlayıcılar** ve HTTP-sözleşme testleri (mock transport) kullanılır.
-- Neo4j için Docker gerekir; entegrasyon testleri Neo4j erişilebilirse çalışır, değilse `skip` edilir ve
-  raporda "çalıştırılmadı" olarak belirtilir (başarılı sayılmaz).
-- Mimari ilke: önce dikey dilim (sahte sağlayıcı ile), sonra gerçek LM Studio adaptörü.
-
-## Fazlar
-
-| Faz | İçerik | Çıkış kapısı | Durum |
+| Phase | Scope | Status | Evidence |
 | --- | --- | --- | --- |
-| 0 | Paket iskeleti, `pyproject`, tipli ayarlar, hatalar, loglama, domain modelleri, ontoloji, durum makineleri, `.env.example`, Compose, CI iskeleti | `ruff`, `mypy`, `pytest` yeşil | Bu turda |
-| 1 | Giriş doğrulama (UTF-8, limitler), idempotency anahtarları, not/revizyon/iş servisleri, Neo4j migrasyon + repository (veya bellek içi repo) | Create/update/delete + idempotency testleri | Bu turda (bellek içi repo + Neo4j migrasyon dosyası) |
-| 2 | Deterministik chunker (tam dilim, kod noktası ofsetleri), sahte extraction/embedding, worker iş döngüsü, lease fencing, atomik yayın | Worker yalnızca tam revizyonu yayınlar | Bu turda (bellek içi) |
-| 3 | LM Studio HTTPX adaptörü, capability probe'ları, extraction şeması + doğrulama sırası, entity resolution | Doğrulama/ontoloji birim testleri; canlı test sonra | Bu turda (adaptör + doğrulama) |
-| 4 | Arama: RRF, lexical/vector aday birleştirme, aktif revizyon filtresi | Eski/silinmiş kanıt asla dönmez | Bu turda (RRF + filtre mantığı) |
-| 5 | Graf genişletme (2 semantik sıçrama, limitler), kanıt paketleme, token bütçesi | Çok-notlu 2-hop fikstürü | Tamamlandı (bellek içi kaynak) |
-| 6 | Yanıt üretimi, atıf doğrulama, abstention, graph_version kontrolü | Çalışan örnek soru-cevap | Tamamlandı (sahte model ile) |
-| 7 | FastAPI uçları + Streamlit arayüzü (Notes/Ask/Graph/System) | Uçtan uca kullanıcı akışı | Tamamlandı (bellek içi depo + demo sağlayıcılarla; Neo4j yok) |
-| 8 | Güvenilirlik: InferenceGate, yeniden deneme bütçeleri, restart kurtarma, yedekleme | Hata enjeksiyon testleri | Sonraki tur |
-| 9 | Değerlendirme seti, baseline'lar, canlı smoke, operasyon rehberi | Raporlanmış sonuçlar | Sonraki tur |
+| 0 Bootstrap | Package, lock, config, Compose, CI | Done | `uv.lock`, `compose.yaml`, CI workflow |
+| 1 Persistence and notes | Store contract, Neo4j repository, idempotency, leases | Done (Neo4j) | 18 contract tests on both stores |
+| 2 Text ingestion | Chunker, validation, staged publication | Done | chunker and publication tests |
+| 3 Real extraction | LM Studio adapter, schema validation, entity resolution | Adapter and validation done; live model not run | HTTP contract tests with mock transport; `scripts/check_lmstudio.py` needs a live server |
+| 4 Search | Vector and full-text indexes, active filter, RRF | Done (Neo4j indexes) | scoped candidate contract tests; Turkish case folding test |
+| 5 Graph retrieval | Entity linking, bounded expansion, evidence packing | Done | expansion limit tests; 2-hop contract test |
+| 6 Answers | Structured answers, citation validation, abstention, graph version | Done with demo model | answer and citation tests |
+| 7 Interface | FastAPI, Streamlit (Notes, Ask, Graph, System) | Done | API tests, Streamlit AppTest, screenshots from the earlier session, container smoke test |
+| 8 Reliability | Inference gate, lease fencing, restart recovery, backup | Done; live LM Studio recovery not run | gate contract tests; measured backup and restore |
+| 9 Evaluation | Dataset, baselines, live smoke, operations guide | Partly: dataset and harness done; live run not possible here | `evaluation/`, `scripts/evaluate.py`, `docs/operations.md` |
 
-## Bu turun teslimatı
+## Definition of done (architecture 17.2), honest status
 
-Faz 0 tamamı; Faz 1–4'ün **saf-Python çekirdeği** (Neo4j'den bağımsız test edilebilir mantık) ve
-Neo4j migrasyonu. Dürüst raporlama: yazılan ama çalıştırılmayan hiçbir şey "test edildi" sayılmaz.
+- Installs from the committed lockfile: yes (`uv sync --frozen`).
+- Schema setup repeatable and checks index compatibility: yes.
+- LM Studio serves the configured models from the actual caller: **not verified** (no LM Studio here).
+- Structured output, Turkish/English, embedding dimension, retrieval probes on recorded profiles:
+  **not verified live**.
+- Concurrent API/worker inference within memory limits, gate recovery: gate logic verified; memory
+  limits and real GPU behaviour **not measured**.
+- Worker resumes durable work after restart: yes (lease reclaim, separate process).
+- Notes created, replaced, deleted without stale evidence: yes.
+- Every claim traceable to an exact passage in an immutable revision: yes (offset check on read).
+- Turkish and English extraction pass the evaluation cases: **not measured with a real model**.
+- Hybrid search and graph traversal respect scope and limits: yes.
+- Answers have valid citations or state insufficient evidence: yes (citation validation).
+- Contradictions, uncertainty, negation preserved: prompt and data model support it; **not
+  evaluated** with a real model.
+- UI exposes progress, failures, evidence, source passages: yes (Streamlit, verified by screenshot).
+- Unit, contract, integration and deterministic end-to-end tests pass: yes (96 tests).
+- Real LM Studio smoke test passes: **not run**.
+- Evaluation report identifies dataset, models, prompts, counts, limits: partly (demo providers only).
+- Logs and history contain no credentials or unintended note content: logs carry IDs and timings
+  only; no secrets were committed (checked for the test password).
+- Backup and restore exercised on disposable data: yes.
+- Tested installation and startup instructions saved: yes (`docs/operations.md`, `README.md`).

@@ -1,4 +1,4 @@
-"""JSON views over store objects. Never exposes embeddings, prompts or credentials."""
+"""JSON views over store snapshots. Never exposes embeddings, prompts or credentials."""
 
 from __future__ import annotations
 
@@ -8,7 +8,8 @@ from typing import Any
 
 from notes_graphrag.core.errors import BadRequest
 from notes_graphrag.domain.state_machines import JobStatus, RevisionStatus
-from notes_graphrag.persistence.memory import Job, MemoryStore, Note
+from notes_graphrag.persistence.base import Store
+from notes_graphrag.persistence.models import Job, Note
 
 
 def iso(dt: datetime | None) -> str | None:
@@ -24,7 +25,7 @@ def decode_cursor(cursor: str | None, n: int) -> list[str] | None:
         return None
     try:
         parts = base64.urlsafe_b64decode(cursor.encode()).decode().split("\x1f")
-    except Exception as exc:  # noqa: BLE001
+    except (ValueError, UnicodeDecodeError) as exc:
         raise BadRequest("invalid cursor", code="INVALID_CURSOR") from exc
     if len(parts) != n:
         raise BadRequest("invalid cursor", code="INVALID_CURSOR")
@@ -45,8 +46,10 @@ def job_view(job: Job) -> dict[str, Any]:
     }
 
 
-def note_state(store: MemoryStore, note: Note) -> str:
-    desired = store.revisions[note.desired_revision_id]
+def note_state(store: Store, note: Note) -> str:
+    desired = store.get_revision(note.desired_revision_id)
+    if desired is None:
+        return "processing"
     if desired.status == RevisionStatus.READY:
         return "ready"
     if desired.status == RevisionStatus.FAILED:
@@ -54,7 +57,7 @@ def note_state(store: MemoryStore, note: Note) -> str:
     return "processing"
 
 
-def note_view(store: MemoryStore, note: Note) -> dict[str, Any]:
+def note_view(store: Store, note: Note) -> dict[str, Any]:
     job = store.job_for_revision(note.desired_revision_id)
     return {
         "note_id": note.note_id,

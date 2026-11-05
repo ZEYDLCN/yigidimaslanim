@@ -83,3 +83,15 @@ class BadRequest(AppError):
 class UnsupportedMedia(ValidationFailed):
     code = "UNSUPPORTED_MEDIA_TYPE"
     http_status = 415
+
+
+class InferenceBusy(AppError):
+    code = "INFERENCE_BUSY"
+    http_status = 503
+    retryable = True
+
+
+class DependencyUnavailable(AppError):
+    code = "DEPENDENCY_UNAVAILABLE"
+    http_status = 503
+    retryable = True

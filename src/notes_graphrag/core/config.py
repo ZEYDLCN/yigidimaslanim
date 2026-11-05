@@ -12,6 +12,9 @@ class Settings(BaseSettings):
     app_env: str = "development"
     workspace_id: str = "default"
     log_level: str = "INFO"
+    store_backend: str = "neo4j"
+    graphrag_demo: bool = False
+    worker_poll_seconds: float = 0.5
 
     neo4j_uri: str = "bolt://127.0.0.1:7687"
     neo4j_database: str = "neo4j"

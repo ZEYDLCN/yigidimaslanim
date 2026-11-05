@@ -49,7 +49,7 @@ REVISION_TRANSITIONS: dict[RevisionStatus, frozenset[RevisionStatus]] = {
     R.PENDING: frozenset({R.PROCESSING, R.CANCELLED, R.SUPERSEDED}),
     R.PROCESSING: frozenset({R.READY, R.FAILED, R.CANCELLED, R.SUPERSEDED, R.PENDING}),
     R.READY: frozenset({R.SUPERSEDED, R.CANCELLED}),
-    R.FAILED: frozenset({R.PENDING}),
+    R.FAILED: frozenset({R.PENDING, R.CANCELLED}),
     R.SUPERSEDED: frozenset(),
     R.CANCELLED: frozenset(),
 }

@@ -1,9 +1,12 @@
-"""Hybrid retrieval: lexical + vector (RRF) -> entity seeds -> bounded graph expansion -> pack."""
+"""Hybrid retrieval: lexical + vector (RRF) -> entity seeds -> bounded graph expansion -> pack.
+
+`mode` supports the evaluation baselines (architecture 16.2): "vector", "hybrid", "graph".
+"""
 
 from __future__ import annotations
 
 from dataclasses import dataclass, field
-from typing import Any
+from typing import Any, Literal
 
 from notes_graphrag.core.config import Settings
 from notes_graphrag.ingestion.entity_resolution import normalize_name
@@ -11,13 +14,14 @@ from notes_graphrag.providers.interfaces import EmbeddingProvider
 from notes_graphrag.retrieval.evidence import EvidencePack, evidence_budget, pack_evidence
 from notes_graphrag.retrieval.fusion import rrf
 from notes_graphrag.retrieval.graph import ExpandedClaim, Limits, expand
-from notes_graphrag.retrieval.lexical import query_terms, tokens
+from notes_graphrag.retrieval.lexical import tokens
 from notes_graphrag.retrieval.source import ClaimRecord, KnowledgeSource
-from notes_graphrag.retrieval.vector import QUERY_TEMPLATE_V1, cosine, format_query
+from notes_graphrag.retrieval.vector import QUERY_TEMPLATE_V1, format_query
 
 CANDIDATE_CAP = 40
 FUSED_CAP = 20
 CHUNK_SEEDS = 5
+Mode = Literal["vector", "hybrid", "graph"]
 
 
 @dataclass
@@ -44,11 +48,13 @@ class Retriever:
         limits: Limits | None = None,
         query_template: str = QUERY_TEMPLATE_V1,
         min_vector_score: float = 0.5,
-        use_graph: bool = True,
+        mode: Mode = "graph",
     ) -> None:
         self.source, self.emb, self.s = source, embeddings, settings
-        self.limits, self.template = limits or Limits(), query_template
-        self.min_vector_score, self.use_graph = min_vector_score, use_graph
+        self.limits = limits or Limits()
+        self.template = query_template
+        self.min_vector_score = min_vector_score
+        self.mode = mode
 
     def link_entities(self, question: str) -> tuple[list[str], list[str]]:
         """Unambiguous question entities, plus ambiguous names (kept as text signals only)."""
@@ -69,47 +75,38 @@ class Retriever:
 
     def retrieve(self, question: str) -> RetrievalResult:
         version = self.source.graph_version()
-        chunks = self.source.chunks()
-        empty = RetrievalResult(EvidencePack(), False, version, diagnostics={"evidence_count": 0})
-        if not chunks:
-            return empty
-
         qvec = self.emb.embed([format_query(self.template, question)])[0]
-        scored = sorted(
-            ((cosine(qvec, c.embedding), c.chunk_id) for c in chunks), key=lambda x: (-x[0], x[1])
+        vec_hits = self.source.vector_candidates(qvec, CANDIDATE_CAP)
+        top = vec_hits[0][1] if vec_hits else 0.0
+        vec_rank = [cid for cid, _ in vec_hits]
+        lex_rank = (
+            self.source.lexical_candidates(question, CANDIDATE_CAP) if self.mode != "vector" else []
         )
-        vec_rank = [cid for _, cid in scored[:CANDIDATE_CAP]]
-        top_vec = scored[0][0]
-        terms = set(query_terms(question))
-        hits = sorted(
-            ((len(terms & set(tokens(c.text))), c.chunk_id) for c in chunks),
-            key=lambda x: (-x[0], x[1]),
-        )
-        lex_rank = [cid for n, cid in hits[:CANDIDATE_CAP] if n > 0]
         fused = rrf([lex_rank, vec_rank], limit=FUSED_CAP)
-
-        linked, ambiguous = self.link_entities(question)
-        relevant = bool(lex_rank) or bool(linked) or top_vec >= self.min_vector_score
+        linked, ambiguous = self.link_entities(question) if self.mode == "graph" else ([], [])
+        relevant = bool(lex_rank) or bool(linked) or top >= self.min_vector_score
         diag: dict[str, Any] = {
-            "retrieval_mode": "hybrid_graph" if self.use_graph else "hybrid",
-            "candidates": len(chunks),
+            "retrieval_mode": self.mode,
             "lexical_hits": len(lex_rank),
+            "vector_top_score": round(top, 4),
             "linked_entities": len(linked),
             "ambiguous_names": ambiguous,
         }
         if not relevant:
             return RetrievalResult(EvidencePack(), False, version, diagnostics=diag)
 
-        by_id = {c.chunk_id: c for c in chunks}
         expanded: list[ExpandedClaim] = []
-        if self.use_graph:
+        seed_chunks = fused[:CHUNK_SEEDS]
+        if self.mode == "graph":
             seeds = list(linked)
-            for cid in fused[:CHUNK_SEEDS]:
+            for cid in seed_chunks:
                 for cl in self.source.claims_for_chunk(cid):
                     seeds += [cl.subject_id, cl.object_id]
-            seeds = list(dict.fromkeys(seeds))
-            expanded = expand(self.source, seeds, self.limits)
+            expanded = expand(self.source, list(dict.fromkeys(seeds)), self.limits)
             expanded.sort(key=lambda x: (x.hop, x.seed_id not in linked, x.claim.claim_id))
+
+        ids = set(fused) | {x.claim.chunk_id for x in expanded}
+        by_id = self.source.chunks_by_ids(sorted(ids))
 
         # Chunk priority = fused rank score + best expansion-path bonus (hop 1: 1.0, hop 2: 0.5).
         score: dict[str, float] = {}
@@ -120,14 +117,16 @@ class Retriever:
             bonus[x.claim.chunk_id] = max(bonus.get(x.claim.chunk_id, 0.0), 1.0 / x.hop)
         for cid, b in bonus.items():
             score[cid] = score.get(cid, 0.0) + b
-        ranked_ids = sorted(score, key=lambda c: (-score[c], c))
-        claims: list[ClaimRecord] = [x.claim for x in expanded]
-        for cid in fused[:CHUNK_SEEDS]:
-            claims += [c for c in self.source.claims_for_chunk(cid) if c not in claims]
+        ranked_ids = sorted((c for c in score if c in by_id), key=lambda c: (-score[c], c))
+
+        claims: dict[str, ClaimRecord] = {x.claim.claim_id: x.claim for x in expanded}
+        for cid in seed_chunks:
+            for cl in self.source.claims_for_chunk(cid):
+                claims.setdefault(cl.claim_id, cl)
 
         pack = pack_evidence(
-            [by_id[c] for c in ranked_ids if c in by_id],
-            claims,
+            [by_id[c] for c in ranked_ids],
+            list(claims.values()),
             budget_tokens=evidence_budget(self.s, question),
             max_items=self.limits.final_passages,
         )

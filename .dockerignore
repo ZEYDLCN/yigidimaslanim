@@ -1,0 +1,5 @@
+*
+!Dockerfile
+!wheelhouse
+!requirements.lock.txt
+!migrations

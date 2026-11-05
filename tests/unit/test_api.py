@@ -10,7 +10,7 @@ NOTE = "Ada works on Project Atlas. Project Atlas uses Neo4j."
 
 @pytest.fixture
 def ctx():
-    return build_context(Settings(_env_file=None), demo=True, run_worker=False)
+    return build_context(Settings(_env_file=None), demo=True, backend="memory")
 
 
 @pytest.fixture
@@ -165,7 +165,9 @@ def test_reindex_reuses_matching_revision(client, ctx):
 
 
 def test_system_status_and_unexpected_errors(client, ctx):
-    ctx.worker.run_once()
+    from datetime import UTC, datetime
+
+    ctx.store.heartbeat(datetime.now(UTC))  # the worker loop does this in production
     s = client.get("/api/v1/system/status").json()
     assert s["worker"]["fresh"] and s["lm_studio"]["mode"] == "demo-fake"
     assert "password" not in str(s).lower() and "api_key" not in str(s).lower()

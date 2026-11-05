@@ -23,17 +23,14 @@ def entities(
     limit: Annotated[int, Query(ge=1, le=100)] = 20,
     cursor: str | None = None,
 ) -> JSONResponse:
-    src = ctx_of(request).source
+    src = ctx_of(request).knowledge
     key = normalize_name(q) if q else None
-    rows = sorted(
-        (e for e in src.entities() if key is None or key in normalize_name(e.name)),
-        key=lambda e: (e.name, e.entity_id),
-    )
+    rows = [e for e in src.entities() if key is None or key in normalize_name(e.name)]
     parts = decode_cursor(cursor, 2)
     if parts:
         rows = [e for e in rows if (e.name, e.entity_id) > (parts[0], parts[1])]
     page = rows[:limit]
-    nxt = encode_cursor(page[-1].name, page[-1].entity_id) if len(rows) > limit else None
+    nxt = encode_cursor(page[-1].name, page[-1].entity_id) if len(rows) > limit and page else None
     items = [
         {
             "entity_id": e.entity_id,
@@ -46,43 +43,14 @@ def entities(
     return ok(request, {"items": items, "next_cursor": nxt})
 
 
-@router.get("/graph")
-def graph(
-    request: Request,
-    entity_id: str | None = None,
-    note_id: str | None = None,
-    hops: Annotated[int, Query(ge=1, le=2)] = 1,
-) -> JSONResponse:
-    if bool(entity_id) == bool(note_id):
-        raise BadRequest("provide exactly one of entity_id or note_id", code="BAD_GRAPH_QUERY")
-    src = ctx_of(request).source
-    chunks = {c.chunk_id: c for c in src.chunks()}
-    claims: list[ClaimRecord]
-    if entity_id:
-        if entity_id not in {e.entity_id for e in src.entities()}:
-            raise NotFound("entity not found")
-        claims = [
-            x.claim
-            for x in expand(src, [entity_id], Limits(max_hops=hops, total_claims=MAX_EDGES + 1))
-        ]
-    else:
-        owned = [c.chunk_id for c in chunks.values() if c.note_id == note_id]
-        if not owned:
-            raise NotFound("note not found or not indexed")
-        seen: dict[str, ClaimRecord] = {}
-        for cid in owned:
-            for cl in src.claims_for_chunk(cid):
-                seen[cl.claim_id] = cl
-        claims = list(seen.values())
-
+def _edges(
+    claims: list[ClaimRecord],
+) -> tuple[dict[str, dict[str, Any]], list[dict[str, Any]], bool]:
     nodes: dict[str, dict[str, Any]] = {}
     edges: list[dict[str, Any]] = []
     limited = len(claims) > MAX_EDGES
     for c in claims[:MAX_EDGES]:
         new = {c.subject_id, c.object_id} - nodes.keys()
-        ch = chunks.get(c.chunk_id)
-        if ch is None:
-            continue
         if len(nodes) + len(new) > MAX_NODES:
             limited = True
             continue
@@ -97,16 +65,39 @@ def graph(
                 "polarity": c.polarity,
                 "modality": c.modality,
                 "evidence": {
-                    "note_id": ch.note_id,
-                    "revision_id": ch.revision_id,
-                    "title": ch.title,
+                    "note_id": c.note_id,
+                    "revision_id": c.revision_id,
+                    "title": c.title,
                     "start_char": c.evidence_start,
                     "end_char": c.evidence_end,
                     "quote": c.evidence_quote,
                 },
             }
         )
-    return ok(
-        request,
-        {"nodes": list(nodes.values()), "edges": edges, "limited": limited},
-    )
+    return nodes, edges, limited
+
+
+@router.get("/graph")
+def graph(
+    request: Request,
+    entity_id: str | None = None,
+    note_id: str | None = None,
+    hops: Annotated[int, Query(ge=1, le=2)] = 1,
+) -> JSONResponse:
+    if bool(entity_id) == bool(note_id):
+        raise BadRequest("provide exactly one of entity_id or note_id", code="BAD_GRAPH_QUERY")
+    src = ctx_of(request).knowledge
+    if entity_id:
+        if entity_id not in {e.entity_id for e in src.entities()}:
+            raise NotFound("entity not found")
+        claims = [
+            x.claim
+            for x in expand(src, [entity_id], Limits(max_hops=hops, total_claims=MAX_EDGES + 1))
+        ]
+    else:
+        assert note_id is not None
+        if src.note_active_chunks(note_id) == 0:
+            raise NotFound("note not found or not indexed")
+        claims = src.claims_for_note(note_id)
+    nodes, edges, limited = _edges(claims)
+    return ok(request, {"nodes": list(nodes.values()), "edges": edges, "limited": limited})

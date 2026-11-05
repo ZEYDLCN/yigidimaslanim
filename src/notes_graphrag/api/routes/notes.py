@@ -8,51 +8,54 @@ from fastapi.responses import JSONResponse
 
 from notes_graphrag.api.common import ctx_of, idempotency_key, ok
 from notes_graphrag.api.schemas import NoteBody
-from notes_graphrag.api.views import (
-    decode_cursor,
-    encode_cursor,
-    iso,
-    job_view,
-    note_state,
-    note_view,
-)
+from notes_graphrag.api.views import decode_cursor, encode_cursor, note_view
 from notes_graphrag.core.errors import NotFound
 from notes_graphrag.domain.state_machines import RevisionStatus
 from notes_graphrag.ingestion.validation import decode_text, validate_filename
+from notes_graphrag.persistence.models import Note, Submission
 
 router = APIRouter(prefix="/api/v1/notes")
 Key = Annotated[str, Depends(idempotency_key)]
 
 
-def _accepted(request: Request, note, rev, job) -> JSONResponse:  # type: ignore[no-untyped-def]
+def _accepted(request: Request, sub: Submission) -> JSONResponse:
     return ok(
         request,
         {
-            "note_id": note.note_id,
-            "revision_id": rev.revision_id,
-            "job_id": job.job_id,
-            "status": job.status.value.lower(),
+            "note_id": sub.note.note_id,
+            "revision_id": sub.revision.revision_id,
+            "job_id": sub.job.job_id,
+            "status": sub.job.status.value.lower(),
+            "replayed": sub.replayed,
         },
         202,
     )
 
 
+def _live(request: Request, note_id: str) -> Note:
+    note = ctx_of(request).store.get_note(note_id)
+    if note is None or note.deleted_at is not None:
+        raise NotFound("note not found")  # deleted notes look exactly like missing ones
+    return note
+
+
 @router.post("")
 def create_note(request: Request, body: NoteBody, key: Key) -> JSONResponse:
-    note, rev, job = ctx_of(request).notes.create(body.title, body.text, key)
-    return _accepted(request, note, rev, job)
+    return _accepted(request, ctx_of(request).notes.create(body.title, body.text, key))
 
 
 @router.post("/upload")
 def upload_note(
-    request: Request, key: Key, file: Annotated[UploadFile, File()], title: Annotated[str, Form()]
+    request: Request,
+    key: Key,
+    file: Annotated[UploadFile, File()],
+    title: Annotated[str, Form()],
 ) -> JSONResponse:
     ctx = ctx_of(request)
     validate_filename(file.filename or "")
     raw = file.file.read(ctx.settings.max_note_bytes + 1)  # bounded read
     text = decode_text(raw, ctx.settings)
-    note, rev, job = ctx.notes.create(title, text, key)
-    return _accepted(request, note, rev, job)
+    return _accepted(request, ctx.notes.create(title, text, key))
 
 
 @router.get("")
@@ -69,24 +72,15 @@ def list_notes(
     return ok(request, {"items": [note_view(ctx.store, n) for n in rows], "next_cursor": nxt})
 
 
-def _live(request: Request, note_id: str):  # type: ignore[no-untyped-def]
-    store = ctx_of(request).store
-    note = store.notes.get(note_id)
-    if note is None or note.deleted_at is not None:
-        raise NotFound("note not found")  # deleted notes are indistinguishable from missing
-    return note
-
-
 @router.get("/{note_id}")
 def get_note(request: Request, note_id: str) -> JSONResponse:
-    note = _live(request, note_id)
-    return ok(request, note_view(ctx_of(request).store, note))
+    return ok(request, note_view(ctx_of(request).store, _live(request, note_id)))
 
 
 @router.get("/{note_id}/revisions/{revision_id}")
 def get_revision(request: Request, note_id: str, revision_id: str) -> JSONResponse:
     _live(request, note_id)
-    rev = ctx_of(request).store.revisions.get(revision_id)
+    rev = ctx_of(request).store.get_revision(revision_id)
     if rev is None or rev.note_id != note_id or rev.status == RevisionStatus.CANCELLED:
         raise NotFound("revision not found")
     return ok(
@@ -104,8 +98,8 @@ def get_revision(request: Request, note_id: str, revision_id: str) -> JSONRespon
 
 @router.put("/{note_id}")
 def replace_note(request: Request, note_id: str, body: NoteBody, key: Key) -> JSONResponse:
-    note, rev, job = ctx_of(request).notes.replace(note_id, body.title, body.text, key)
-    return _accepted(request, note, rev, job)
+    sub = ctx_of(request).notes.replace(note_id, body.title, body.text, key)
+    return _accepted(request, sub)
 
 
 @router.delete("/{note_id}", status_code=204)
@@ -116,11 +110,4 @@ def delete_note(request: Request, note_id: str) -> Response:
 
 @router.post("/{note_id}/reindex")
 def reindex(request: Request, note_id: str, key: Key) -> JSONResponse:
-    ctx = ctx_of(request)
-    note = _live(request, note_id)
-    cur = ctx.store.revisions[note.desired_revision_id]
-    n, rev, job = ctx.notes.replace(note_id, cur.title, cur.text, key)
-    return _accepted(request, n, rev, job)
-
-
-__all__ = ["router", "iso", "job_view", "note_state"]
+    return _accepted(request, ctx_of(request).notes.reindex(note_id, key))

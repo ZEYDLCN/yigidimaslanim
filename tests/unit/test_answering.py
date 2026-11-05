@@ -67,7 +67,7 @@ class Env:
         self.emb = FakeEmbeddings(64)
         schema = ExtractionOutput.model_json_schema()
         self.worker = Worker(self.store, self.s, FakeChat(), self.emb, schema, lambda: NOW)
-        self.notes = [self.svc.create(f"N{i}", t, f"k{i}")[0] for i, t in enumerate(notes)]
+        self.notes = [self.svc.create(f"N{i}", t, f"k{i}").note for i, t in enumerate(notes)]
         self.drain()
         self.src = MemoryKnowledge(self.store)
         retr.setdefault("query_template", "{question}")
@@ -91,7 +91,7 @@ def test_two_hop_across_notes_answers_with_valid_citations():
         assert rev.text[c.start_char : c.end_char] == c.quote
     labels = {n["label"] for n in r.graph["nodes"]}
     assert {"Project Atlas", "Neo4j"} <= labels
-    assert r.diagnostics["graph_version"] == env.store.graph_version
+    assert r.diagnostics["graph_version"] == env.store.graph_version()
 
 
 def test_graph_expansion_reaches_second_note_from_ada_only():
@@ -182,7 +182,7 @@ def test_deletion_during_generation_is_not_returned():
 
 def test_persistent_changes_raise_conflict():
     env = Env([A, B])
-    env.chat.hook = lambda n: setattr(env.store, "graph_version", env.store.graph_version + 1)
+    env.chat.hook = lambda n: setattr(env.store, "graph_ver", env.store.graph_ver + 1)
     with pytest.raises(KnowledgeBaseChanged):
         env.qa.ask("Which database does Ada's project use?")
 
@@ -232,7 +232,9 @@ class StubSource:
 
 
 def mk(cid, s, o):
-    return ClaimRecord(cid, s, s, "RELATED_TO", o, o, "POSITIVE", "ASSERTED", "ch", "q", 0, 1, None)
+    return ClaimRecord(
+        cid, s, s, "RELATED_TO", o, o, "POSITIVE", "ASSERTED", "ch", "q", 0, 1, None, "n", "r", "t"
+    )
 
 
 def test_expansion_hub_cap_total_cap_and_cycles():
@@ -248,7 +250,7 @@ def test_expansion_hub_cap_total_cap_and_cycles():
 
 
 def _chunk(cid, s, e, text):
-    return ChunkRecord(cid, "n", "r", "T", s, e, text[s:e], (), text)
+    return ChunkRecord(cid, "n", "r", "T", s, e, text[s:e], text)
 
 
 def test_pack_merges_overlap_and_respects_budget():
