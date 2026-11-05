@@ -1,0 +1,18 @@
+# Neo4j only for now. LM Studio runs on the host and is NOT started by Compose.
+services:
+  neo4j:
+    image: neo4j:5.26-community
+    environment:
+      NEO4J_AUTH: neo4j/${NEO4J_PASSWORD:?set NEO4J_PASSWORD in .env}
+    ports:
+      - "127.0.0.1:7474:7474"
+      - "127.0.0.1:7687:7687"
+    volumes:
+      - neo4j_data:/data
+    healthcheck:
+      test: ["CMD-SHELL", "cypher-shell -u neo4j -p \"$$NEO4J_PASSWORD\" 'RETURN 1' || exit 1"]
+      interval: 10s
+      timeout: 5s
+      retries: 12
+volumes:
+  neo4j_data:
