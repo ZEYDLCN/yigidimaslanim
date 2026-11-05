@@ -73,3 +73,13 @@ class QuestionTimeout(AppError):
 class GenerationInvalid(AppError):
     code = "GENERATION_INVALID"
     http_status = 502
+
+
+class BadRequest(AppError):
+    code = "BAD_REQUEST"
+    http_status = 400
+
+
+class UnsupportedMedia(ValidationFailed):
+    code = "UNSUPPORTED_MEDIA_TYPE"
+    http_status = 415

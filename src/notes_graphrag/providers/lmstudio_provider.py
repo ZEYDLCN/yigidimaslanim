@@ -121,6 +121,28 @@ class LMStudioProvider:
             raise ProviderBadResponse("content is not JSON", code="NOT_JSON") from exc
         return content
 
+    def chat_text(self, *, model: str, system: str, user: str, max_tokens: int) -> str:
+        data = self._post(
+            "/chat/completions",
+            {
+                "model": model,
+                "messages": [
+                    {"role": "system", "content": system},
+                    {"role": "user", "content": user},
+                ],
+                "temperature": 0,
+                "max_tokens": max_tokens,
+                "stream": False,
+            },
+        )
+        try:
+            content = data["choices"][0]["message"]["content"]
+        except (KeyError, IndexError, TypeError) as exc:
+            raise ProviderBadResponse("malformed chat envelope") from exc
+        if not isinstance(content, str) or not content.strip():
+            raise ProviderBadResponse("missing final answer")
+        return content
+
     def embed(self, texts: list[str]) -> list[list[float]]:
         out: list[list[float]] = []
         for i in range(0, len(texts), MAX_EMBED_BATCH):

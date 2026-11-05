@@ -3,7 +3,7 @@
 from __future__ import annotations
 
 from notes_graphrag.core.config import Settings
-from notes_graphrag.core.errors import PayloadTooLarge, ValidationFailed
+from notes_graphrag.core.errors import PayloadTooLarge, UnsupportedMedia, ValidationFailed
 
 SUPPORTED_SUFFIXES = (".txt", ".md")
 
@@ -41,4 +41,4 @@ def validate_title(title: str, settings: Settings) -> str:
 
 def validate_filename(name: str) -> None:
     if not name.lower().endswith(SUPPORTED_SUFFIXES):
-        raise ValidationFailed("unsupported file type", code="UNSUPPORTED_MEDIA_TYPE")
+        raise UnsupportedMedia("unsupported file type")

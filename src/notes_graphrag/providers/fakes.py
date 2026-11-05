@@ -89,3 +89,49 @@ def cosine(a: list[float], b: list[float]) -> float:
     return sum(x * y for x, y in zip(a, b, strict=True)) / (
         math.sqrt(sum(x * x for x in a)) * math.sqrt(sum(y * y for y in b))
     )
+
+
+class DemoChat:
+    """Demo-only model: rule-based extraction plus an answerer that cites matching evidence.
+
+    It exists so the API/UI can be exercised without LM Studio. It proves nothing about model
+    quality.
+    """
+
+    def __init__(self) -> None:
+        self._extract = FakeChat()
+
+    def chat_json(
+        self,
+        *,
+        model: str,
+        system: str,
+        user: str,
+        schema_name: str,
+        schema: dict[str, Any],
+        max_tokens: int,
+    ) -> str:
+        if schema_name != "answer":
+            return self._extract.chat_json(
+                model=model,
+                system=system,
+                user=user,
+                schema_name=schema_name,
+                schema=schema,
+                max_tokens=max_tokens,
+            )
+        from notes_graphrag.retrieval.lexical import query_terms, tokens
+
+        q = re.search(r"QUESTION:\n(.*?)\n\nEVIDENCE", user, re.S)
+        terms = set(query_terms(q.group(1) if q else ""))
+        sentences = []
+        for eid, body in re.findall(r'<evidence id="(E\d+)"[^>]*>\n(.*?)\n</evidence>', user, re.S):
+            if terms & set(tokens(body)):
+                sentences.append({"text": body.strip()[:300], "evidence_ids": [eid]})
+        if not sentences:
+            return json.dumps(
+                {"status": "insufficient_evidence", "sentences": [], "missing_information": []}
+            )
+        return json.dumps(
+            {"status": "answered", "sentences": sentences[:3], "missing_information": []}
+        )

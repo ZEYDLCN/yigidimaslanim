@@ -14,6 +14,7 @@ from dataclasses import dataclass, field
 from datetime import datetime
 
 from notes_graphrag.core.errors import (
+    Conflict,
     IdempotencyKeyReused,
     NoteDeleted,
     NotFound,
@@ -116,6 +117,7 @@ class MemoryStore:
     staged: dict[str, dict[str, StagedChunk]] = field(default_factory=dict)  # revision -> chunk
     entities: dict[str, KnownEntity] = field(default_factory=dict)
     claims: dict[str, StoredClaim] = field(default_factory=dict)
+    worker_heartbeat: datetime | None = None
     lock: threading.RLock = field(default_factory=threading.RLock)
 
     # ---- request creation (note + revision + job in one atomic step) ----
@@ -210,6 +212,38 @@ class MemoryStore:
                     RevisionStatus.SUPERSEDED,
                 ):
                     r.status = RevisionStatus.CANCELLED
+
+    # ---- queries / explicit operations used by the API ----
+    def list_notes(self, after: tuple[datetime, str] | None, limit: int) -> tuple[list[Note], bool]:
+        with self.lock:
+            rows = sorted(
+                (n for n in self.notes.values() if n.deleted_at is None),
+                key=lambda n: (n.created_at, n.note_id),
+            )
+            if after is not None:
+                rows = [n for n in rows if (n.created_at, n.note_id) > after]
+            return rows[:limit], len(rows) > limit
+
+    def job_for_revision(self, revision_id: str) -> Job | None:
+        with self.lock:
+            return next((j for j in self.jobs.values() if j.revision_id == revision_id), None)
+
+    def retry_job(self, job_id: str, now: datetime) -> Job:
+        with self.lock:
+            job = self.jobs.get(job_id)
+            if job is None:
+                raise NotFound("job not found")
+            note = self.notes[job.note_id]
+            if note.deleted_at is not None:
+                raise NoteDeleted("note was deleted")
+            if note.desired_revision_id != job.revision_id:
+                raise Conflict("job was superseded by a newer revision", code="JOB_SUPERSEDED")
+            check_job(job.status, JobStatus.QUEUED)  # only FAILED may be requeued
+            rev = self.revisions[job.revision_id]
+            check_revision(rev.status, RevisionStatus.PENDING)
+            job.status, rev.status = JobStatus.QUEUED, RevisionStatus.PENDING
+            job.attempt, job.error_code, job.available_at = 0, None, now
+            return job
 
     # ---- worker side ----
     def acquire(self, now: datetime, lease_seconds: int) -> Job | None:

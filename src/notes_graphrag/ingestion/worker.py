@@ -36,6 +36,7 @@ class Worker:
         self.clock = clock
 
     def run_once(self) -> Job | None:
+        self.store.worker_heartbeat = self.clock()
         job = self.store.acquire(self.clock(), self.s.job_lease_seconds)
         if job is None:
             return None
