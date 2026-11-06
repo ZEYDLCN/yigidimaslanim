@@ -39,10 +39,20 @@ from notes_graphrag.persistence.models import (
     GateStatus,
     Job,
     Note,
+    ProbeRecord,
     Revision,
     StagedChunk,
     Submission,
 )
+
+
+@dataclass(frozen=True)
+class IdemRec:
+    payload_hash: str
+    note_id: str
+    revision_id: str
+    job_id: str
+    created_at: datetime
 
 
 @dataclass
@@ -70,12 +80,13 @@ class MemoryStore:
     revisions: dict[str, Revision] = field(default_factory=dict)
     jobs: dict[str, Job] = field(default_factory=dict)
     # request_key -> (payload_hash, note_id, revision_id, job_id)
-    idem: dict[str, tuple[str, str, str, str]] = field(default_factory=dict)
+    idem: dict[str, IdemRec] = field(default_factory=dict)
     staged: dict[str, dict[str, StagedChunk]] = field(default_factory=dict)
     entities: dict[str, KnownEntity] = field(default_factory=dict)
     claims: dict[str, MemClaim] = field(default_factory=dict)
     gates: dict[str, MemGate] = field(default_factory=dict)
     graph_ver: int = 0
+    probes: list[ProbeRecord] = field(default_factory=list)
     heartbeat_at: datetime | None = None
     lock: threading.RLock = field(default_factory=threading.RLock)
 
@@ -95,13 +106,14 @@ class MemoryStore:
         with self.lock:
             hit = self.idem.get(rkey)
             if hit is not None:
-                ph, nid, rid, jid = hit
-                if ph != payload_hash:
+                if hit.payload_hash != payload_hash:
                     raise IdempotencyKeyReused("idempotency key reused with different payload")
-                note = self.notes[nid]
+                note = self.notes[hit.note_id]
                 if note.deleted_at is not None:
                     raise NoteDeleted("note was deleted")
-                return Submission(note, self.revisions[rid], self.jobs[jid], replayed=True)
+                return Submission(
+                    note, self.revisions[hit.revision_id], self.jobs[hit.job_id], replayed=True
+                )
 
             if note_id is None:
                 note = Note(str(uuid.uuid4()), title, now, desired_revision_id="")
@@ -116,7 +128,9 @@ class MemoryStore:
                 ):
                     job = self.job_for_revision(cur.revision_id)
                     assert job is not None
-                    self.idem[rkey] = (payload_hash, note.note_id, cur.revision_id, job.job_id)
+                    self.idem[rkey] = IdemRec(
+                        payload_hash, note.note_id, cur.revision_id, job.job_id, now
+                    )
                     return Submission(note, cur, job, replayed=True)
                 self._supersede_queued(note.desired_revision_id)
 
@@ -141,7 +155,7 @@ class MemoryStore:
             self.jobs[job.job_id] = job
             note = replace(note, title=title, desired_revision_id=rev.revision_id)
             self.notes[note.note_id] = note
-            self.idem[rkey] = (payload_hash, note.note_id, rev.revision_id, job.job_id)
+            self.idem[rkey] = IdemRec(payload_hash, note.note_id, rev.revision_id, job.job_id, now)
             return Submission(note, rev, job, replayed=False)
 
     def _supersede_queued(self, revision_id: str) -> None:
@@ -158,11 +172,10 @@ class MemoryStore:
             self.revisions[revision_id] = replace(rev, status=RevisionStatus.SUPERSEDED)
 
     def _live_note(self, note_id: str) -> Note:
+        # Deleted notes look exactly like missing ones to new requests (architecture 7.3).
         note = self.notes.get(note_id)
-        if note is None:
+        if note is None or note.deleted_at is not None:
             raise NotFound("note not found")
-        if note.deleted_at is not None:
-            raise NoteDeleted("note was deleted")
         return note
 
     def get_note(self, note_id: str) -> Note | None:
@@ -216,7 +229,9 @@ class MemoryStore:
                 raise NotFound("job not found")
             note = self.notes[job.note_id]
             if note.deleted_at is not None:
-                raise NoteDeleted("note was deleted")
+                raise NotFound("job not found")
+            if job.status != JobStatus.FAILED:
+                raise Conflict("only failed jobs can be retried", code="JOB_NOT_RETRYABLE")
             if note.desired_revision_id != job.revision_id:
                 raise Conflict("job was superseded by a newer revision", code="JOB_SUPERSEDED")
             check_job(job.status, JobStatus.QUEUED)
@@ -405,6 +420,18 @@ class MemoryStore:
         with self.lock:
             return self.graph_ver
 
+    # ---- capability probes ------------------------------------------------------------------
+    def record_probe(
+        self, fingerprint: str, passed: bool, results: list[dict[str, Any]], now: datetime
+    ) -> None:
+        with self.lock:
+            rows = tuple({str(k): str(v) for k, v in r.items()} for r in results)
+            self.probes.append(ProbeRecord(fingerprint, passed, now, rows))
+
+    def latest_probe(self) -> ProbeRecord | None:
+        with self.lock:
+            return self.probes[-1] if self.probes else None
+
     # ---- shared inference slot ----------------------------------------------------------------
     def ensure_gate(self, endpoint_id: str) -> None:
         with self.lock:
@@ -448,6 +475,48 @@ class MemoryStore:
             g = self.gates.setdefault(endpoint_id, MemGate())
             if g.state == GATE_BUSY and g.token == token:
                 g.state, g.owner, g.token, g.expires = target, None, None, None
+
+    # ---- retention ---------------------------------------------------------------------------
+    def purge(
+        self,
+        now: datetime,
+        content_retention_days: float,
+        idempotency_retention_days: float,
+    ) -> dict[str, int]:
+        """Remove source content of notes deleted before the content cutoff, orphan entities,
+        and idempotency records older than their retention. Note tombstones remain, so a delayed
+        replay of a deleted note's request still answers NOTE_DELETED (architecture 7.2, 7.3)."""
+        content_cutoff = now - timedelta(days=content_retention_days)
+        idem_cutoff = now - timedelta(days=idempotency_retention_days)
+        counts = {"revisions": 0, "claims": 0, "entities": 0, "idempotency": 0}
+        with self.lock:
+            for note in list(self.notes.values()):
+                if note.deleted_at is None or note.deleted_at > content_cutoff:
+                    continue
+                rids = {r.revision_id for r in self.revisions.values() if r.note_id == note.note_id}
+                if not rids:
+                    continue
+                for rid in rids:
+                    self.revisions.pop(rid, None)
+                    self.staged.pop(rid, None)
+                    counts["revisions"] += 1
+                for cid in [k for k, mc in self.claims.items() if mc.revision_id in rids]:
+                    del self.claims[cid]
+                    counts["claims"] += 1
+                for jid in [j.job_id for j in self.jobs.values() if j.note_id == note.note_id]:
+                    del self.jobs[jid]
+                self.notes[note.note_id] = replace(
+                    note, title="", desired_revision_id="", active_revision_id=None
+                )
+            used = {mc.subject_id for mc in self.claims.values()}
+            used |= {mc.object_id for mc in self.claims.values()}
+            for eid in [e for e in self.entities if e not in used]:
+                del self.entities[eid]
+                counts["entities"] += 1
+            for rkey in [k for k, rec in self.idem.items() if rec.created_at < idem_cutoff]:
+                del self.idem[rkey]
+                counts["idempotency"] += 1
+        return counts
 
     # ---- operations -------------------------------------------------------------------------
     def health(self) -> dict[str, Any]:

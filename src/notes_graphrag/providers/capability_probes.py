@@ -117,3 +117,20 @@ def run_probes(
     ):
         results.append(_run(name, fn))
     return results
+
+
+def profile_fingerprint(settings: Settings) -> str:
+    """Identifies the configuration a probe result applies to. A change of model, dimension,
+    profile, context length or query template makes earlier results inapplicable (14.2)."""
+    import hashlib
+
+    parts = [
+        settings.extraction_model,
+        settings.answer_model,
+        settings.embedding_model,
+        str(settings.embedding_dimensions),
+        settings.embedding_profile,
+        str(settings.lm_studio_context_tokens),
+        hashlib.sha256(QUERY_TEMPLATE_V1.encode()).hexdigest()[:16],
+    ]
+    return hashlib.sha256("|".join(parts).encode()).hexdigest()[:24]

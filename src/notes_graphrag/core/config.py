@@ -39,6 +39,7 @@ class Settings(BaseSettings):
 
     max_note_bytes: int = 1_048_576
     max_note_chars: int = 100_000
+    max_request_bytes: int = 2 * 1024 * 1024
     max_title_chars: int = 200
     max_chunks_per_note: int = 128
     max_context_tokens: int = 4096
@@ -51,6 +52,9 @@ class Settings(BaseSettings):
     question_timeout_seconds: float = 180
     inference_slot_wait_seconds: float = 30
     idempotency_retention_days: int = 30
+    deleted_content_retention_days: float = 1.0
+    maintenance_interval_seconds: float = 3600.0
+    capability_probe_max_age_hours: float = 24.0
 
     app_env_choices: tuple[str, ...] = Field(
         default=("development", "test", "production"), exclude=True

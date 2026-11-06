@@ -12,6 +12,7 @@ Locking discipline:
 from __future__ import annotations
 
 import hashlib
+import json
 import uuid
 from collections.abc import Callable
 from datetime import datetime, timedelta
@@ -52,6 +53,7 @@ from notes_graphrag.persistence.models import (
     GateStatus,
     Job,
     Note,
+    ProbeRecord,
     Revision,
     StagedChunk,
     Submission,
@@ -186,13 +188,12 @@ class Neo4jStore:
         ts = to_iso(now)
 
         def fn(tx: ManagedTransaction) -> Submission:
+            # Replays use the ids stored on the record, never relationships (migration 003).
             hit = tx.run(
                 """
                 MATCH (i:IdempotencyRecord {workspace_id: $ws, request_key: $rkey})
-                MATCH (i)-[:FOR_NOTE]->(n:Note)
-                MATCH (i)-[:FOR_REVISION]->(r:NoteRevision)
-                MATCH (i)-[:FOR_JOB]->(j:IngestionJob)
-                RETURN i.payload_hash AS ph, n, r, j
+                MATCH (n:Note {workspace_id: $ws, note_id: i.note_id})
+                RETURN i.payload_hash AS ph, i.revision_id AS rid, i.job_id AS jid, n
                 """,
                 ws=ws,
                 rkey=rkey,
@@ -204,7 +205,17 @@ class Neo4jStore:
                 note = _note(row["n"])
                 if note.deleted_at is not None:
                     raise NoteDeleted("note was deleted")
-                return Submission(note, _rev(row["r"]), _job(row["j"]), replayed=True)
+                rev = tx.run(
+                    "MATCH (r:NoteRevision {workspace_id: $ws, revision_id: $rid}) RETURN r",
+                    ws=ws,
+                    rid=row["rid"],
+                ).data()[0]["r"]
+                job = tx.run(
+                    "MATCH (j:IngestionJob {workspace_id: $ws, job_id: $jid}) RETURN j",
+                    ws=ws,
+                    jid=row["jid"],
+                ).data()[0]["j"]
+                return Submission(note, _rev(rev), _job(job), replayed=True)
 
             if note_id is not None:
                 # Lock the note first, then read its committed desired revision.
@@ -215,11 +226,9 @@ class Neo4jStore:
                     nid=note_id,
                     ts=ts,
                 ).data()
-                if not locked:
+                if not locked or _note(locked[0]["n"]).deleted_at is not None:
                     raise NotFound("note not found")
                 note = _note(locked[0]["n"])
-                if note.deleted_at is not None:
-                    raise NoteDeleted("note was deleted")
                 cur_rows = tx.run(
                     """
                     MATCH (n:Note {workspace_id: $ws, note_id: $nid})-[:HAS_REVISION]->
@@ -243,7 +252,9 @@ class Neo4jStore:
                         MATCH (r:NoteRevision {workspace_id: $ws, revision_id: $rid})
                         MATCH (j:IngestionJob {workspace_id: $ws, job_id: $jid})
                         CREATE (i:IdempotencyRecord {workspace_id: $ws, request_key: $rkey,
-                                                     payload_hash: $ph, created_at: $ts})
+                                                     payload_hash: $ph, created_at: $ts,
+                                                     note_id: $nid, revision_id: $rid,
+                                                     job_id: $jid})
                         CREATE (i)-[:FOR_NOTE]->(n), (i)-[:FOR_REVISION]->(r),
                                (i)-[:FOR_JOB]->(j)
                         """,
@@ -287,7 +298,8 @@ class Neo4jStore:
                                         chunks_total: 0, chunks_done: 0})
                 CREATE (j)-[:FOR_NOTE]->(n), (j)-[:BUILDS]->(r)
                 CREATE (i:IdempotencyRecord {workspace_id: $ws, request_key: $rkey,
-                                             payload_hash: $ph, created_at: $ts})
+                                             payload_hash: $ph, created_at: $ts,
+                                             note_id: $nid, revision_id: $rid, job_id: $jid})
                 CREATE (i)-[:FOR_NOTE]->(n), (i)-[:FOR_REVISION]->(r), (i)-[:FOR_JOB]->(j)
                 """,
                 ws=ws,
@@ -362,10 +374,8 @@ class Neo4jStore:
                 nid=note_id,
                 ts=ts,
             ).data()
-            if not locked:
+            if not locked or _note(locked[0]["n"]).deleted_at is not None:
                 raise NotFound("note not found")
-            if _note(locked[0]["n"]).deleted_at is not None:
-                raise NoteDeleted("note was deleted")
             tx.run(
                 """
                 MATCH (n:Note {workspace_id: $ws, note_id: $nid})
@@ -431,7 +441,9 @@ class Neo4jStore:
                 raise NotFound("job not found")
             job, note, rev = _job(rows[0]["j"]), _note(rows[0]["n"]), _rev(rows[0]["r"])
             if note.deleted_at is not None:
-                raise NoteDeleted("note was deleted")
+                raise NotFound("job not found")
+            if job.status != JobStatus.FAILED:
+                raise Conflict("only failed jobs can be retried", code="JOB_NOT_RETRYABLE")
             if note.desired_revision_id != rev.revision_id:
                 raise Conflict("job was superseded by a newer revision", code="JOB_SUPERSEDED")
             check_job(job.status, JobStatus.QUEUED)
@@ -858,6 +870,41 @@ class Neo4jStore:
         )
         return int(rows[0]["v"]) if rows else 0
 
+    # ---- capability probes ---------------------------------------------------------------------
+    def record_probe(
+        self, fingerprint: str, passed: bool, results: list[dict[str, Any]], now: datetime
+    ) -> None:
+        self._exec_write(
+            """
+            CREATE (p:CapabilityProbe {workspace_id: $ws, fingerprint: $fp, passed: $passed,
+                                       recorded_at: $ts, results: $results})
+            """,
+            ws=self.workspace_id,
+            fp=fingerprint,
+            passed=passed,
+            ts=to_iso(now),
+            results=json.dumps(results, ensure_ascii=False, sort_keys=True),
+        )
+
+    def latest_probe(self) -> ProbeRecord | None:
+        rows = self._rows(
+            """
+            MATCH (p:CapabilityProbe {workspace_id: $ws})
+            RETURN p ORDER BY p.recorded_at DESC LIMIT 1
+            """,
+            ws=self.workspace_id,
+        )
+        if not rows:
+            return None
+        p = dict(rows[0]["p"])
+        results = json.loads(p["results"])
+        return ProbeRecord(
+            fingerprint=p["fingerprint"],
+            passed=bool(p["passed"]),
+            recorded_at=req_dt(p["recorded_at"]),
+            results=tuple({str(k): str(v) for k, v in r.items()} for r in results),
+        )
+
     # ---- shared inference slot ----------------------------------------------------------------
     def ensure_gate(self, endpoint_id: str) -> None:
         self._exec_write(
@@ -939,6 +986,71 @@ class Neo4jStore:
             token=token,
             target=target,
         )
+
+    # ---- retention -----------------------------------------------------------------------------
+    def purge(
+        self,
+        now: datetime,
+        content_retention_days: float,
+        idempotency_retention_days: float,
+    ) -> dict[str, int]:
+        ws = self.workspace_id
+        content_cutoff = to_iso(now - timedelta(days=content_retention_days))
+        idem_cutoff = to_iso(now - timedelta(days=idempotency_retention_days))
+
+        def fn(tx: ManagedTransaction) -> dict[str, int]:
+            # Content of deleted notes (revisions, chunks, claims, jobs); the tombstone stays.
+            rows = tx.run(
+                """
+                MATCH (n:Note {workspace_id: $ws})
+                WHERE n.deleted_at IS NOT NULL AND n.deleted_at <= $cutoff
+                OPTIONAL MATCH (n)-[:HAS_REVISION]->(r:NoteRevision)
+                OPTIONAL MATCH (r)-[:HAS_CHUNK]->(c:Chunk)
+                OPTIONAL MATCH (cl:Claim {workspace_id: $ws})-[:EVIDENCED_BY]->(c)
+                WITH n, collect(DISTINCT r) AS revs, collect(DISTINCT c) AS chunks,
+                     collect(DISTINCT cl) AS claims
+                FOREACH (x IN claims | DETACH DELETE x)
+                FOREACH (x IN chunks | DETACH DELETE x)
+                FOREACH (x IN revs | DETACH DELETE x)
+                WITH n, size(revs) AS nrev, size(claims) AS ncl
+                OPTIONAL MATCH (j:IngestionJob {workspace_id: $ws, note_id: n.note_id})
+                DETACH DELETE j
+                WITH n, nrev, ncl, count(j) AS njobs
+                WHERE nrev > 0 OR ncl > 0 OR njobs > 0
+                SET n.title = '', n.desired_revision_id = '', n.active_revision_id = null
+                RETURN sum(nrev) AS revisions, sum(ncl) AS claims
+                """,
+                ws=ws,
+                cutoff=content_cutoff,
+            ).data()
+            counts = {
+                "revisions": int(rows[0]["revisions"] or 0) if rows else 0,
+                "claims": int(rows[0]["claims"] or 0) if rows else 0,
+            }
+            orphans = tx.run(
+                """
+                MATCH (e:Entity {workspace_id: $ws})
+                WHERE NOT (e)<-[:SUBJECT|OBJECT]-(:Claim)
+                DETACH DELETE e
+                RETURN count(e) AS c
+                """,
+                ws=ws,
+            ).single()
+            counts["entities"] = int(orphans["c"]) if orphans else 0
+            idem = tx.run(
+                """
+                MATCH (i:IdempotencyRecord {workspace_id: $ws})
+                WHERE i.created_at < $cutoff
+                DETACH DELETE i
+                RETURN count(i) AS c
+                """,
+                ws=ws,
+                cutoff=idem_cutoff,
+            ).single()
+            counts["idempotency"] = int(idem["c"]) if idem else 0
+            return counts
+
+        return self._write(fn)
 
     # ---- operations ---------------------------------------------------------------------------
     def schema_version(self) -> int:

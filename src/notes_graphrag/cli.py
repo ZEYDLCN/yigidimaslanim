@@ -47,6 +47,40 @@ def cmd_migrate(settings: Settings, demo: bool) -> int:
     return 0
 
 
+def cmd_probe(settings: Settings, args: argparse.Namespace) -> int:
+    """Run the LM Studio capability probes; with --record, store the outcome for readiness."""
+    from datetime import UTC, datetime
+
+    from notes_graphrag.api.dependencies import build_providers, build_storage, effective_settings
+    from notes_graphrag.providers.capability_probes import profile_fingerprint, run_probes
+
+    if _demo(settings, args.demo):
+        print("demo providers cannot be probed; run without --demo against LM Studio")
+        return 2
+    s = effective_settings(settings, False)
+    providers = build_providers(s, demo=False)
+    assert providers.lm is not None
+    results = run_probes(providers.lm, s)
+    passed = all(r.ok for r in results)
+    for r in results:
+        print(f"[{'ok' if r.ok else 'FAIL'}] {r.name}: {r.code} {r.detail}")
+    print(f"profile fingerprint: {profile_fingerprint(s)}")
+    if args.record:
+        store, _knowledge, closeable = build_storage(s, "neo4j")
+        try:
+            store.record_probe(
+                profile_fingerprint(s),
+                passed,
+                [{"name": r.name, "ok": r.ok, "code": r.code} for r in results],
+                datetime.now(UTC),
+            )
+            print("recorded" + ("" if passed else " (failed result; readiness stays closed)"))
+        finally:
+            if closeable is not None:
+                closeable.close()
+    return 0 if passed else 1
+
+
 def cmd_serve(settings: Settings, args: argparse.Namespace) -> int:
     import uvicorn
 
@@ -90,7 +124,7 @@ def cmd_worker(settings: Settings, args: argparse.Namespace) -> int:
     worker = build_worker(s, store, providers, gate, owner)
     stop = threading.Event()
     try:
-        run_forever(worker, store, stop, s.worker_poll_seconds)
+        run_forever(worker, store, stop, s.worker_poll_seconds, settings=s)
     except KeyboardInterrupt:
         stop.set()
     finally:
@@ -114,6 +148,10 @@ def main(argv: list[str] | None = None) -> int:
     serve.add_argument("--host", default="127.0.0.1")
     serve.add_argument("--port", type=int, default=8000)
 
+    probe = sub.add_parser("probe", help="run LM Studio capability probes")
+    probe.add_argument("--record", action="store_true", help="store the outcome for readiness")
+    probe.add_argument("--demo", action="store_true")
+
     worker = sub.add_parser("worker", help="run an ingestion worker")
     worker.add_argument("--demo", action="store_true")
 
@@ -122,6 +160,8 @@ def main(argv: list[str] | None = None) -> int:
     _logging(settings)
     if args.cmd == "migrate":
         return cmd_migrate(settings, args.demo)
+    if args.cmd == "probe":
+        return cmd_probe(settings, args)
     if args.cmd == "serve":
         args.store = args.store or settings.store_backend
         return cmd_serve(settings, args)

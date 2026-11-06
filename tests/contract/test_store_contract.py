@@ -11,6 +11,7 @@ from notes_graphrag.core.errors import (
     Conflict,
     IdempotencyKeyReused,
     NoteDeleted,
+    NotFound,
     ProviderUnavailable,
     StaleLease,
 )
@@ -68,8 +69,10 @@ def test_lifecycle_create_publish_answer_replace_delete(kit):
     assert k.store.get_note(note.note_id).deleted_at is not None
     assert ask(k, "What does Project Atlas use?").status == "insufficient_evidence"
     assert k.knowledge.vector_candidates(k.emb.embed(["postgres"])[0], 5) == []
-    with pytest.raises(NoteDeleted):
+    with pytest.raises(NotFound):  # deleted notes look missing to new requests
         k.notes.replace(note.note_id, "t", "x", "k3")
+    with pytest.raises(NotFound):
+        k.notes.delete(note.note_id)
 
 
 def test_idempotent_replay_and_key_conflict(kit):
@@ -314,3 +317,66 @@ def test_gated_slot_marks_recovery_on_ambiguous_timeout(kit):
     with gate.slot("api"):  # the probe succeeds, so the slot is admitted again
         pass
     assert k.store.gate_status("ep-amb").state == GATE_IDLE
+
+
+# ---- retention (architecture 7.2 and 7.3) ----------------------------------------------------
+def test_purge_removes_deleted_content_but_keeps_replay_protection(kit):
+    k = kit
+    s = k.notes.create("T", TEXT, "purge-key")
+    drain(k)
+    k.notes.delete(s.note.note_id)
+    later = NOW + timedelta(seconds=1)
+    counts = k.store.purge(later, 0, 30)
+    assert counts["revisions"] >= 1 and counts["claims"] >= 1
+    assert k.store.get_revision(s.revision.revision_id) is None  # source text is gone
+    assert k.knowledge.claims_for_note(s.note.note_id) == []
+    assert k.knowledge.note_active_chunks(s.note.note_id) == 0
+    assert k.store.get_note(s.note.note_id).deleted_at is not None  # tombstone remains
+    with pytest.raises(NoteDeleted):  # replay answers NOTE_DELETED; it must not create a note
+        k.notes.create("T", TEXT, "purge-key")
+    assert k.store.list_notes(None, 100)[0] == []
+
+
+def test_purge_keeps_live_notes_and_removes_orphan_entities(kit):
+    k = kit
+    gone = k.notes.create("Gone", "Mert works on Project Zed.", "gone")
+    keep = k.notes.create("Keep", TEXT, "keep")
+    drain(k)
+    assert any(e.name == "Mert" for e in k.knowledge.entities())
+    k.notes.delete(gone.note.note_id)
+    counts = k.store.purge(NOW + timedelta(seconds=1), 0, 30)
+    assert counts["entities"] >= 1
+    names = {e.name for e in k.knowledge.entities()}
+    assert "Mert" not in names and {"Ada", "Neo4j"} <= names
+    assert k.knowledge.claims_for_note(keep.note.note_id)
+    assert ask(k, "Which database does Project Atlas use?").status == "answered"
+
+
+def test_idempotency_records_expire_after_their_retention(kit):
+    k = kit
+    k.notes.create("A", TEXT, "expiring")
+    k.store.purge(NOW + timedelta(days=31), 1, 30)  # the record is older than 30 days
+    again = k.notes.create("A", TEXT, "expiring")  # the key is now a new operation
+    assert again.replayed is False
+
+
+def test_purged_note_cannot_be_recreated_through_its_id(kit):
+    k = kit
+    s = k.notes.create("T", TEXT, "gone-id")
+    k.notes.delete(s.note.note_id)
+    k.store.purge(NOW + timedelta(seconds=1), 0, 30)
+    with pytest.raises(NotFound):
+        k.notes.replace(s.note.note_id, "T", "new text", "after-purge")
+
+
+# ---- capability probe records --------------------------------------------------------------
+def test_probe_records_round_trip(kit):
+    k = kit
+    assert k.store.latest_probe() is None
+    k.store.record_probe("fp-1", False, [{"name": "chat", "ok": False, "code": "X"}], NOW)
+    later = NOW + timedelta(minutes=5)
+    k.store.record_probe("fp-2", True, [{"name": "chat", "ok": True, "code": "OK"}], later)
+    latest = k.store.latest_probe()
+    assert latest.fingerprint == "fp-2" and latest.passed is True
+    assert latest.recorded_at == later
+    assert latest.results[0]["name"] == "chat"

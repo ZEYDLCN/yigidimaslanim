@@ -145,12 +145,31 @@ def run_forever(
     stop: threading.Event,
     poll_seconds: float = 0.5,
     clock: Callable[[], datetime] = utcnow,
+    settings: Settings | None = None,
 ) -> None:
-    """Heartbeat and process jobs until stopped. Store outages are logged and retried."""
+    """Heartbeat, process jobs and run retention until stopped. Store outages are retried.
+
+    Retention runs at most every `maintenance_interval_seconds`. It is idempotent, so a second
+    worker running it at the same time is harmless.
+    """
+    s = settings or worker.s
+    last_maintenance: datetime | None = None
     while not stop.is_set():
         job = None
         try:
-            store.heartbeat(clock())
+            now = clock()
+            store.heartbeat(now)
+            due = (
+                last_maintenance is None
+                or (now - last_maintenance).total_seconds() >= s.maintenance_interval_seconds
+            )
+            if due:
+                counts = store.purge(
+                    now, s.deleted_content_retention_days, s.idempotency_retention_days
+                )
+                last_maintenance = now
+                if any(counts.values()):
+                    log.info("retention purged %s", counts)
             job = worker.run_once()
         except Exception:  # noqa: BLE001 - keep the loop alive; leases protect the work
             log.exception("worker iteration failed")

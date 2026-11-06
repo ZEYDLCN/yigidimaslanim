@@ -21,6 +21,12 @@ def ok(request: Request, body: dict[str, Any], status: int = 200) -> JSONRespons
 def idempotency_key(
     key: str | None = Header(default=None, alias="Idempotency-Key"),
 ) -> str:
-    if not key or not key.strip() or len(key) > 200:
+    if key is None or not key.strip():
         raise BadRequest("Idempotency-Key header is required", code="IDEMPOTENCY_KEY_REQUIRED")
-    return key.strip()
+    key = key.strip()
+    if len(key) > 200 or not key.isprintable():
+        raise BadRequest(
+            "Idempotency-Key must be at most 200 printable characters",
+            code="IDEMPOTENCY_KEY_INVALID",
+        )
+    return key

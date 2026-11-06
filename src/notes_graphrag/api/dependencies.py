@@ -149,6 +149,7 @@ class AppContext:
     gate: InferenceGate
     worker: Worker
     mode: str
+    demo: bool
     lm_status: Callable[[], dict[str, Any]]
     embedded_worker: bool = False
     closeable: Any = None
@@ -204,6 +205,7 @@ def build_context(
         gate=gate,
         worker=worker,
         mode=f"{backend}-{'demo' if demo else 'lmstudio'}",
+        demo=demo,
         lm_status=lm_status,
         embedded_worker=embedded_worker,
         closeable=closeable,

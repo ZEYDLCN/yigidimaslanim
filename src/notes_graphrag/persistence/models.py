@@ -72,6 +72,14 @@ class Submission:
 
 
 @dataclass(frozen=True)
+class ProbeRecord:
+    fingerprint: str
+    passed: bool
+    recorded_at: datetime
+    results: tuple[dict[str, str], ...]
+
+
+@dataclass(frozen=True)
 class GateStatus:
     state: str
     owner_id: str | None
