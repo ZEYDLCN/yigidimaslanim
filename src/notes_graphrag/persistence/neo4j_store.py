@@ -19,7 +19,13 @@ from datetime import datetime, timedelta
 from typing import Any, TypeVar
 
 from neo4j import Driver, ManagedTransaction
-from neo4j.exceptions import ConstraintError, Neo4jError, ServiceUnavailable, SessionExpired
+from neo4j.exceptions import (
+    ConstraintError,
+    Neo4jError,
+    ResultFailedError,
+    ServiceUnavailable,
+    SessionExpired,
+)
 
 from notes_graphrag.core.errors import (
     Conflict,
@@ -167,7 +173,9 @@ class Neo4jStore:
                     fingerprint=fingerprint,
                     now=now,
                 )
-            except ConstraintError:
+            except (ConstraintError, ResultFailedError):
+                # ResultFailedError: a sibling statement in the same transaction hit the same
+                # uniqueness conflict. The whole transaction rolled back, so a retry is safe.
                 if attempt == 2:
                     raise
         raise AssertionError("unreachable")
