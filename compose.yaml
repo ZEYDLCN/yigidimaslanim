@@ -49,6 +49,7 @@ services:
 
   api:
     build: .
+    init: true
     command: ["serve", "--host", "0.0.0.0", "--port", "8000"]
     environment: *app-env
     ports:
@@ -67,6 +68,7 @@ services:
 
   worker:
     build: .
+    init: true  # tini as PID 1: the worker is a child process, so crashes are signals it can receive
     command: ["worker"]
     environment:
       <<: *app-env

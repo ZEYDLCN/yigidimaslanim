@@ -41,6 +41,31 @@ class Report:
             self.failures += 1
 
 
+# A real crash: SIGKILL to the worker process from inside its container. `docker kill` is not used
+# because Docker treats it as a manual stop, which restart policies do not recover from.
+CRASH_PROGRAM = """
+import os, signal
+me = os.getpid()
+for p in os.listdir("/proc"):
+    if not p.isdigit() or int(p) == me:
+        continue
+    try:
+        argv = open(f"/proc/{p}/cmdline", "rb").read().split(b"\\0")
+    except OSError:
+        continue
+    if any(a.endswith(b"notes-graphrag") for a in argv) and b"worker" in argv:
+        os.kill(int(p), signal.SIGKILL)
+"""
+
+
+def crash_worker(container: str) -> None:
+    sh("docker", "exec", container, "python", "-c", CRASH_PROGRAM)
+
+
+def restart_count(container: str) -> int:
+    return int(sh("docker", "inspect", container, "--format", "{{.RestartCount}}").strip())
+
+
 def sh(*args: str) -> str:
     return subprocess.run(args, capture_output=True, text=True, check=True).stdout
 
@@ -201,8 +226,14 @@ def run(report: Report) -> None:
     running = wait_until(lambda: job(s5["job_id"])["status"] == "RUNNING", 30)
     report.check("S5 worker killed", "job is RUNNING when the worker dies", bool(running))
     sim(chat="ok", chat_delay=0.0)
-    sh("docker", "kill", WORKER)
-    time.sleep(2)
+    restarts_before = restart_count(WORKER)
+    crash_worker(WORKER)
+    report.check(
+        "S5 worker killed",
+        "the supervisor restarted the worker container",
+        wait_until(lambda: restart_count(WORKER) > restarts_before, 30) is not False,
+        f"restarts {restarts_before} -> {restart_count(WORKER)}",
+    )
     j_dead = job(s5["job_id"])
     report.check(
         "S5 worker killed",

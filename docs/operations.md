@@ -135,6 +135,32 @@ Demo mode cannot be probed and is reported as exempt. Readiness in demo mode say
 - Every failure, including unknown routes, wrong methods and malformed JSON, uses the same error
   envelope with a `request_id`.
 
+## Chaos run (fault injection against the Compose stack)
+
+`scripts/chaos_stack.py` injects faults into the production path (`GRAPHRAG_DEMO=0`) and checks what
+the API and database report. Prerequisites:
+
+1. The stack is up: `docker compose up -d --wait neo4j`, then `migrate`, then `api worker`.
+2. The LM Studio contract simulator runs on all interfaces so containers can reach it:
+   `uv run python -m tests.support.lmstudio_sim --host 0.0.0.0 --port 1234`.
+   It is a stand-in for the HTTP contract, not LM Studio and not a model.
+3. The probes were recorded: `notes-graphrag probe --record` (same environment as the containers).
+
+Scenarios: provider slow past its timeout (slot goes RECOVERING, job completes after recovery),
+provider down (retries run out, question returns a retryable 503), rejected token (not retried),
+wrong embedding dimension, worker crashed mid-job (SIGKILL inside the container; the supervisor
+restarts it, the lease expires and the job is reclaimed), database restarted during traffic, API
+restarted, a 60-request burst, an oversized body, and a check that note and question text never
+reach the logs.
+
+Two details that matter when reproducing this:
+
+- `docker kill` counts as a manual stop, and restart policies do not recover manual stops. A crash
+  is simulated by signalling the worker process itself. The stack runs with `init: true`, so the
+  worker is not PID 1, which the kernel would otherwise shield from in-container signals.
+- A simulator started from a shell dies when that shell or session is restarted. Check
+  `curl localhost:1234/sim/state` before a run.
+
 ## Known limits (be explicit with users)
 
 - Persistence is Neo4j; the in-memory store is for demos and tests only and loses data on exit.
