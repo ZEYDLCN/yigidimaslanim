@@ -47,18 +47,21 @@ database that was migrated in demo mode. The migration guard refuses a mismatch.
 Neo4j Community has no online dump, so backup stops the database container briefly.
 
 ```bash
-scripts/neo4j_backup.sh gr-neo4j ./backups
+scripts/neo4j_backup.sh <neo4j-container> ./backups
 scripts/neo4j_restore.sh <target-container> ./backups
 ```
 
-Tested on 2026-11-05 with disposable data:
+Tested on 2026-11-06 against the final schema (migrations 1 to 4), with disposable data:
 
-- A marker node was written, then the database dumped (`neo4j.dump`, about 50 KB, 15 s including
-  restart).
-- A fresh, empty `neo4j:5.26-community` container was restored from that dump in about 16 s.
-- After restore: the marker node was present, schema versions were `[1, 2]`, 21 indexes were
-  `ONLINE`, the vector index was 64-dimensional, and the API reported `ready` against the restored
-  database.
+- A marker node was written, then the database dumped to a 1.6 MB `neo4j.dump` in about 21 s,
+  including the container restart.
+- A fresh, empty `neo4j:5.26-community` container was restored from that dump in about 15 s.
+- After restore: the marker node was present, schema versions were `[1, 2, 3, 4]`, and all 21
+  indexes were `ONLINE`.
+
+Capability probe records are part of the database too. The test suite clears the database it runs
+against, so a stack that was tested must be probed again (`notes-graphrag probe --record`) before
+readiness returns to 200.
 
 Backups contain note text and embeddings. Store them with the same care as the database.
 
@@ -94,7 +97,13 @@ has actually stopped. Only the live LM Studio test can show that, and it was not
 | Note deleted during processing | Publication refused; job cancelled | `test_delete_during_processing_blocks_publication` |
 | Previous revision on failed update | Still served | `test_failed_update_keeps_previous_revision` |
 | Separate worker process | Processes an API submission and heartbeats | `test_worker_in_separate_process_processes_api_submission` |
-| Database unavailable | 503 `DEPENDENCY_UNAVAILABLE`, retryable | error handler in `api/app.py` (not separately tested) |
+| Database unavailable | 503 envelope, retryable; no 500s during a real `docker restart` | chaos S6 (`scripts/chaos_stack.py`) |
+| Provider slow past its timeout | Job retried; slot RECOVERING until a probe succeeds; no overlapping calls | chaos S1, `test_timeout_leaves_slot_recovering...` |
+| Provider rejects the token | Fails at once with PROVIDER_AUTH_REJECTED, not retried | chaos S3, `test_bad_chat_outputs_are_classified` |
+| Wrong embedding dimension from the runtime | Fails with EMBEDDING_DIMENSION_MISMATCH | chaos S4, `test_wrong_embedding_dimension...` |
+| Diagnostic probe during ordinary traffic | Shares the slot; never overlaps | `test_diagnostic_probes_cannot_bypass_the_shared_slot` |
+| Replay of a request whose content was purged | Still 409 NOTE_DELETED, no new note | `test_purge_removes_deleted_content_but_keeps_replay_protection` |
+| Oversized or chunked body | 413 envelope, with or without Content-Length | chaos S9, `test_body_over_limit...` |
 
 ## Test database safety
 
@@ -153,6 +162,10 @@ restarts it, the lease expires and the job is reclaimed), database restarted dur
 restarted, a 60-request burst, an oversized body, and a check that note and question text never
 reach the logs.
 
+Results of the last full run (28 of 28 checks passed, 88 s): every scenario above passed, including
+the worker crash (lease expiry, reclaim with attempt 2, slot back to IDLE) and the database restart
+with new ingestion afterwards.
+
 Two details that matter when reproducing this:
 
 - `docker kill` counts as a manual stop, and restart policies do not recover manual stops. A crash
@@ -163,12 +176,19 @@ Two details that matter when reproducing this:
 
 ## Known limits (be explicit with users)
 
-- Persistence is Neo4j; the in-memory store is for demos and tests only and loses data on exit.
+- **Live LM Studio was not run.** No LM Studio runs in this environment, and the lmstudio.ai site
+  is unreachable from here. Everything LM Studio-related is verified against the HTTP contract
+  simulator (`tests/support/lmstudio_sim.py`), not against the product. The first real run is the
+  probe and smoke test on a machine with the models loaded.
+- **No real embedding or chat model was tested.** A candidate multilingual embedding model could
+  not be downloaded: its weights are served from storage that the sandbox cannot reach. Extraction
+  and answers use rule-based fakes in demo mode. Model quality is not measured.
+- Persistence is Neo4j. The in-memory store is for demos and tests only and loses data on exit.
 - No authentication. Keep the API on loopback or behind an authenticated gateway.
-- Idempotency records are kept indefinitely. The 30-day retention in architecture 7.2 is not
-  implemented.
 - Full-text search does not stem (see decision 0001).
 - The relevance gate is permissive: one shared common word can make unrelated passages count as
   evidence (evaluation q16). Tightening it needs a held-out set, not tuning on this one.
 - Entity resolution is conservative and simple: it has no manual merge or split.
-- Live LM Studio, model quality, and the 16 GiB/GPU latency targets were not measured here.
+- One worker is the tested configuration. Several workers are safe by design (leases and fencing),
+  but throughput with more than one was not measured.
+- Tests clear the Neo4j database they run against. Run them on a disposable instance only.

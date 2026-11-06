@@ -63,16 +63,19 @@ scripts/          smoke test, LM Studio probe, backup/restore, wheelhouse, evalu
 
 ## Verified
 
-- 96 tests pass: unit tests, one contract suite run against both the memory store and Neo4j 5.26,
-  Neo4j integration tests (migrations, concurrency, Turkish full-text, separate worker process,
-  API end-to-end).
-- The containerised stack (Neo4j, migrate, API, worker) passes the 12-check smoke test.
-- Backup and restore were exercised on disposable data (`docs/operations.md`).
+- 215 tests pass against Neo4j 5.26.32 Community: unit tests, one contract suite run against both the
+  memory store and Neo4j, an HTTP case matrix on both stores, Streamlit flows, the LM Studio contract
+  over real sockets (against a simulator), and Neo4j integration tests.
+- A fault-injection run against the Compose stack passes 28 of 28 checks: provider timeouts and slot
+  recovery, rejected tokens, a worker crash with lease reclaim, a database restart during traffic,
+  API restart, bursts, oversized bodies, and no note text in logs (`scripts/chaos_stack.py`).
+- Backup and restore were exercised on the final schema (`docs/operations.md`).
 
 ## Not verified here
 
-Live LM Studio behaviour (structured output, embedding quality, latency, Turkish extraction) and
-any evaluation of model quality. See the status list in `docs/DEVELOPMENT_PLAN.md`.
+Live LM Studio behaviour and any real model quality: no LM Studio runs in this environment, and the
+candidate embedding model cannot be downloaded from here. The simulator stands in for the HTTP
+contract only. The open items for a real machine are listed in `docs/DEVELOPMENT_PLAN.md`.
 
 ## Security notes
 
