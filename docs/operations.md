@@ -102,6 +102,39 @@ Destructive Neo4j tests clear the database they point at, so they require
 `NEO4J_TEST_WIPE=1`. They also refuse to run while a worker heartbeat is fresh (under 120 seconds).
 Stop the running services first. CI uses its own throwaway service container.
 
+## Readiness is backed by evidence
+
+`/health/ready` returns 200 only when the database answers, the schema matches the code, the
+required indexes are online, and, in production mode, a capability probe passed recently for
+this exact configuration. The probe records its result and a fingerprint of the models,
+dimension, profile, context length and query template. A changed setting makes an earlier result
+inapplicable, and so does an older result than `CAPABILITY_PROBE_MAX_AGE_HOURS` (default 24).
+
+```bash
+notes-graphrag probe --record     # runs the probes through the shared inference slot and stores the result
+```
+
+Demo mode cannot be probed and is reported as exempt. Readiness in demo mode says so explicitly.
+
+## Retention
+
+- Deleted notes keep a tombstone. Their revisions, chunks, claims and jobs are removed after
+  `DELETED_CONTENT_RETENTION_DAYS` (default 1). Entities left without claims are removed too.
+- Idempotency records are kept for `IDEMPOTENCY_RETENTION_DAYS` (default 30). Within that period a
+  replayed request for a deleted note still answers `409 NOTE_DELETED` and never creates a new
+  note. After it, the same key is a new operation.
+- The worker runs this maintenance about every `MAINTENANCE_INTERVAL_SECONDS` (default 3600). It is
+  idempotent. Counts are logged when anything was removed.
+
+## Request limits
+
+- Bodies larger than `MAX_REQUEST_BYTES` (default 2 MiB) get `413 PAYLOAD_TOO_LARGE`, whether or not
+  the client sent a Content-Length. Upload limits (1 MiB of file content) apply on top of that.
+- Notes may not contain control characters except tab, line feed and carriage return
+  (`422 CONTROL_CHARACTERS`). NUL is never accepted.
+- Every failure, including unknown routes, wrong methods and malformed JSON, uses the same error
+  envelope with a `request_id`.
+
 ## Known limits (be explicit with users)
 
 - Persistence is Neo4j; the in-memory store is for demos and tests only and loses data on exit.

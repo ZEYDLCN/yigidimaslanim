@@ -73,10 +73,16 @@ class LMStudioProvider:
     def list_models(self) -> list[str]:
         try:
             resp = self._client.get("/models")
-            resp.raise_for_status()
+        except httpx.TransportError as exc:
+            raise ProviderUnavailable("LM Studio is unreachable") from exc
+        if resp.status_code in (401, 403):
+            raise ProviderBadResponse("LM Studio rejected the token", code="PROVIDER_AUTH_REJECTED")
+        if resp.status_code >= 400:
+            raise ProviderUnavailable(f"LM Studio model listing failed ({resp.status_code})")
+        try:
             return [m["id"] for m in resp.json()["data"]]
-        except (httpx.HTTPError, KeyError, ValueError, TypeError) as exc:
-            raise ProviderUnavailable("cannot list LM Studio models") from exc
+        except (KeyError, ValueError, TypeError) as exc:
+            raise ProviderBadResponse("malformed model listing") from exc
 
     def chat_json(
         self,

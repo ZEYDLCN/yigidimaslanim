@@ -9,6 +9,7 @@ from __future__ import annotations
 import json
 from collections.abc import Callable
 from dataclasses import dataclass
+from typing import Any
 
 from notes_graphrag.core.config import Settings
 from notes_graphrag.core.errors import AppError
@@ -55,8 +56,9 @@ def _run(name: str, fn: Callable[[], str]) -> ProbeResult:
 
 
 def run_probes(
-    provider: LMStudioProvider, settings: Settings, query_template: str = QUERY_TEMPLATE_V1
+    provider: LMStudioProvider | Any, settings: Settings, query_template: str = QUERY_TEMPLATE_V1
 ) -> list[ProbeResult]:
+    """Run the probes. Pass a GatedLM in the running system so diagnostics share the slot."""
     results: list[ProbeResult] = []
 
     def models() -> str:

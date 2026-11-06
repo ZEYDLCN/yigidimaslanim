@@ -1,6 +1,7 @@
 """End-to-end fixtures: the full HTTP stack (API + worker logic) on both storage backends.
 
-The neo4j variant needs NEO4J_TEST_URI, NEO4J_TEST_PASSWORD and NEO4J_TEST_WIPE=1 (see tests/support).
+The neo4j variant needs NEO4J_TEST_URI, NEO4J_TEST_PASSWORD and NEO4J_TEST_WIPE=1
+(see tests/support).
 """
 
 from __future__ import annotations

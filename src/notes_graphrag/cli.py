@@ -20,6 +20,7 @@ def _logging(settings: Settings) -> None:
         level=settings.log_level,
         format="%(asctime)s %(levelname)s %(name)s %(message)s",
     )
+    logging.getLogger("httpx").setLevel(logging.WARNING)  # one line per model call is noise
 
 
 def _demo(settings: Settings, flag: bool) -> bool:
@@ -51,8 +52,14 @@ def cmd_probe(settings: Settings, args: argparse.Namespace) -> int:
     """Run the LM Studio capability probes; with --record, store the outcome for readiness."""
     from datetime import UTC, datetime
 
-    from notes_graphrag.api.dependencies import build_providers, build_storage, effective_settings
+    from notes_graphrag.api.dependencies import (
+        build_gate,
+        build_providers,
+        build_storage,
+        effective_settings,
+    )
     from notes_graphrag.providers.capability_probes import profile_fingerprint, run_probes
+    from notes_graphrag.providers.gate import GatedLM
 
     if _demo(settings, args.demo):
         print("demo providers cannot be probed; run without --demo against LM Studio")
@@ -60,14 +67,16 @@ def cmd_probe(settings: Settings, args: argparse.Namespace) -> int:
     s = effective_settings(settings, False)
     providers = build_providers(s, demo=False)
     assert providers.lm is not None
-    results = run_probes(providers.lm, s)
-    passed = all(r.ok for r in results)
-    for r in results:
-        print(f"[{'ok' if r.ok else 'FAIL'}] {r.name}: {r.code} {r.detail}")
-    print(f"profile fingerprint: {profile_fingerprint(s)}")
-    if args.record:
-        store, _knowledge, closeable = build_storage(s, "neo4j")
-        try:
+    store, _knowledge, closeable = build_storage(s, "neo4j")
+    try:
+        # Diagnostics use the same inference slot as ordinary requests (architecture 12.2).
+        gate = build_gate(s, store, providers)
+        results = run_probes(GatedLM(providers.lm, gate, "probe"), s)
+        passed = all(r.ok for r in results)
+        for r in results:
+            print(f"[{'ok' if r.ok else 'FAIL'}] {r.name}: {r.code} {r.detail}")
+        print(f"profile fingerprint: {profile_fingerprint(s)}")
+        if args.record:
             store.record_probe(
                 profile_fingerprint(s),
                 passed,
@@ -75,9 +84,9 @@ def cmd_probe(settings: Settings, args: argparse.Namespace) -> int:
                 datetime.now(UTC),
             )
             print("recorded" + ("" if passed else " (failed result; readiness stays closed)"))
-        finally:
-            if closeable is not None:
-                closeable.close()
+    finally:
+        if closeable is not None:
+            closeable.close()
     return 0 if passed else 1
 
 
@@ -124,7 +133,7 @@ def cmd_worker(settings: Settings, args: argparse.Namespace) -> int:
     worker = build_worker(s, store, providers, gate, owner)
     stop = threading.Event()
     try:
-        run_forever(worker, store, stop, s.worker_poll_seconds, settings=s)
+        run_forever(worker, store, stop, s.worker_poll_seconds, settings=s, gate=gate)
     except KeyboardInterrupt:
         stop.set()
     finally:

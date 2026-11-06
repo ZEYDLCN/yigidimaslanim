@@ -117,7 +117,10 @@ def test_rejected_note_content(stack, text, code):
 
 
 def test_accepted_unicode_content_keeps_exact_offsets(stack):
-    text = "😀 Ada works on Project Atlas. 🚀 Project Atlas uses Neo4j.\nİstanbul ofisi çalışıyor.\r\nGöz."
+    text = (
+        "😀 Ada works on Project Atlas. 🚀 Project Atlas uses Neo4j.\n"
+        "İstanbul ofisi çalışıyor.\r\nGöz."
+    )
     created = stack.create("Unicode", text, "uni").json()
     stack.drain()
     rev = stack.client.get(
@@ -325,3 +328,21 @@ def test_graph_edges_carry_exact_evidence(stack):
     for e in g["edges"]:
         ev = e["evidence"]
         assert ev["quote"] and ev["end_char"] > ev["start_char"]
+
+
+def test_system_status_is_json_and_reports_the_slot(stack):
+    from datetime import UTC, datetime
+
+    stack.ctx.store.heartbeat(datetime.now(UTC))
+    stack.ctx.store.gate_try_acquire(
+        stack.ctx.settings.lm_studio_instance_id, "api", "t-status", datetime.now(UTC), 60
+    )
+    r = stack.client.get("/api/v1/system/status")
+    assert r.status_code == 200, r.text[:200]
+    body = r.json()
+    assert body["inference_slot"]["state"] == "BUSY"
+    assert (
+        body["inference_slot"]["lease_expires_at"].endswith("Z")
+        or "+" in body["inference_slot"]["lease_expires_at"]
+    )
+    assert body["worker"]["fresh"] is True

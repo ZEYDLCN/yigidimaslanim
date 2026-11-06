@@ -7,6 +7,7 @@ from fastapi import APIRouter, Request
 from fastapi.responses import JSONResponse
 
 from notes_graphrag.api.common import ctx_of, ok
+from notes_graphrag.api.views import iso
 from notes_graphrag.providers.capability_probes import profile_fingerprint
 
 router = APIRouter()
@@ -74,7 +75,10 @@ def system_status(request: Request) -> JSONResponse:
                 "heartbeat_age_seconds": age,
                 "fresh": age is not None and age <= WORKER_FRESH_SECONDS,
             },
-            "inference_slot": {"state": gate.state, "lease_expires_at": gate.lease_expires_at},
+            "inference_slot": {
+                "state": gate.state,
+                "lease_expires_at": iso(gate.lease_expires_at),
+            },
             "lm_studio": ctx.lm_status(),
             "models": {
                 "extraction": ctx.settings.extraction_model,

@@ -67,6 +67,14 @@ class InferenceGate:
             self.store.gate_release(self.endpoint_id, ptoken, target)
         return target == GATE_IDLE
 
+    def try_recover(self) -> bool:
+        """Probe a RECOVERING slot now, without waiting for a request. True if it cleared."""
+        if self.probe is None:
+            return False
+        if self.store.gate_status(self.endpoint_id).state != GATE_RECOVERING:
+            return False
+        return self._probe_once()
+
     def _acquire(self, owner: str) -> str:
         deadline = time.monotonic() + self.wait
         while True:
@@ -142,6 +150,34 @@ class GatedEmbeddings:
         self.inner, self.gate, self.owner = inner, gate, owner
         self.profile: str = inner.profile
         self.dimensions: int = inner.dimensions
+
+    def embed(self, texts: list[str]) -> list[list[float]]:
+        with self.gate.slot(self.owner):
+            return list(self.inner.embed(texts))
+
+
+class GatedLM:
+    """Every model call of an LM Studio provider passes the shared slot, diagnostics included.
+
+    Model discovery is not inference and is not gated. A health check therefore cannot bypass the
+    one-request-at-a-time limit (architecture 12.2).
+    """
+
+    def __init__(self, inner: Any, gate: InferenceGate, owner: str) -> None:
+        self.inner, self.gate, self.owner = inner, gate, owner
+        self.profile: str = inner.profile
+        self.dimensions: int = inner.dimensions
+
+    def list_models(self) -> list[str]:
+        return list(self.inner.list_models())
+
+    def chat_text(self, **kwargs: Any) -> str:
+        with self.gate.slot(self.owner):
+            return str(self.inner.chat_text(**kwargs))
+
+    def chat_json(self, **kwargs: Any) -> str:
+        with self.gate.slot(self.owner):
+            return str(self.inner.chat_json(**kwargs))
 
     def embed(self, texts: list[str]) -> list[list[float]]:
         with self.gate.slot(self.owner):

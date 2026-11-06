@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import hashlib
 import sys
 from pathlib import Path
 
@@ -24,9 +25,16 @@ def show_error(exc: ApiError) -> None:
     st.error(f"{exc.message or exc.code}  \n`{exc.code}` · request `{exc.request_id}`")
 
 
-def once_key(name: str, api: Api) -> str:
-    """Reuse the same idempotency key for a rerun of a pending action."""
-    return str(st.session_state.setdefault(name, api.new_key()))
+def payload_key(action: str, *parts: bytes | str) -> str:
+    """Idempotency key derived from the action and its content.
+
+    A rerun of the same submission reuses the key. A changed submission gets a new key, so a
+    corrected note after a validation error is never refused as a reused key (409).
+    """
+    digest = hashlib.sha256(action.encode())
+    for part in parts:
+        digest.update(part if isinstance(part, bytes) else part.encode())
+    return digest.hexdigest()[:32]
 
 
 def notes_view(api: Api) -> None:
@@ -37,12 +45,13 @@ def notes_view(api: Api) -> None:
         upload = st.file_uploader("…or a .txt / .md file", type=["txt", "md"])
         if st.form_submit_button("Add"):
             try:
-                key = once_key("create_key", api)
                 if upload is not None:
-                    api.upload_note(title, upload.name, upload.getvalue(), key)
+                    data = upload.getvalue()
+                    key = payload_key("upload", title, upload.name, data)
+                    api.upload_note(title, upload.name, data, key)
                 else:
+                    key = payload_key("create", title, text)
                     api.create_note(title, text, key)
-                st.session_state.pop("create_key", None)  # new key only for a new action
                 st.success("Queued for indexing.")
             except ApiError as exc:
                 show_error(exc)
@@ -57,7 +66,8 @@ def notes_view(api: Api) -> None:
         st.info("No notes yet.")
     for n in items:
         job = n["job"] or {}
-        with st.expander(f"{n['title']} — {STATE_LABEL.get(n['state'], n['state'])}"):
+        label = f"{md_escape(n['title'])} — {STATE_LABEL.get(n['state'], n['state'])}"
+        with st.expander(label):
             if n["state"] == "processing":
                 total = max(job.get("chunks_total", 0), 1)
                 st.progress(job.get("chunks_done", 0) / total, text=job.get("stage") or "queued")
@@ -73,10 +83,8 @@ def notes_view(api: Api) -> None:
             c1, c2 = st.columns(2)
             if c1.button("Replace", key=f"rep-{n['note_id']}"):
                 try:
-                    api.replace_note(
-                        n["note_id"], n["title"], new_text, once_key(f"rk-{n['note_id']}", api)
-                    )
-                    st.session_state.pop(f"rk-{n['note_id']}", None)
+                    key = payload_key("replace", n["note_id"], n["title"], new_text)
+                    api.replace_note(n["note_id"], n["title"], new_text, key)
                     st.rerun()
                 except ApiError as exc:
                     show_error(exc)

@@ -1,4 +1,4 @@
-"""Readiness must be backed by evidence: a recorded, passing, current probe for this configuration."""
+"""Readiness needs evidence: a recorded, passing, current probe for this configuration."""
 
 from __future__ import annotations
 

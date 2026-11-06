@@ -5,6 +5,7 @@ from __future__ import annotations
 import logging
 import random
 import threading
+import time
 from collections.abc import Callable
 from datetime import datetime, timedelta
 from typing import Any
@@ -146,6 +147,7 @@ def run_forever(
     poll_seconds: float = 0.5,
     clock: Callable[[], datetime] = utcnow,
     settings: Settings | None = None,
+    gate: Any = None,
 ) -> None:
     """Heartbeat, process jobs and run retention until stopped. Store outages are retried.
 
@@ -154,11 +156,17 @@ def run_forever(
     """
     s = settings or worker.s
     last_maintenance: datetime | None = None
+    last_recovery_probe = 0.0
     while not stop.is_set():
         job = None
         try:
             now = clock()
             store.heartbeat(now)
+            # A RECOVERING slot is verified proactively; it must not wait for the next request.
+            if gate is not None and time.monotonic() - last_recovery_probe >= 5.0:
+                last_recovery_probe = time.monotonic()
+                if gate.try_recover():
+                    log.info("inference endpoint recovered")
             due = (
                 last_maintenance is None
                 or (now - last_maintenance).total_seconds() >= s.maintenance_interval_seconds
